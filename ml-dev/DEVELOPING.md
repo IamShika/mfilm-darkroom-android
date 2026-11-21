@@ -77,8 +77,15 @@ point, after an 8-byte header. Between points the table is read through the tetr
 in (`lut_apply`), not along the three axes. The place is held to 1/256 of the distance between two
 points. The result is the print: sRGB, 8 bits.
 
-**9. Grain.** Noise is added to the print's 8-bit values, strongest in the mid tones
-(`finish_grain`). It is random, so two developers' grain never agrees pixel for pixel.
+**9. Grain.** The grain is drawn as the lab draws it: a draw at every print pixel, spread over
+the eight about it by a Gaussian of the film stock's `grain_size` (`finish_grain`). `grain_size` is
+in full-resolution pixels, so a print w pixels wide of a frame full wide spreads its grain w/full as
+far; a clump narrower than a print pixel is a softer grain rather than none at all, where the camera
+drew a value at every pixel and a 3200 film stock's grain came out as fine as a 100's (#104, #186).
+The spread takes the strength of a draw a pixel off it, and the strength is up by what it takes
+(`grain_blur`), as the lab's own normalising does; the noise is strongest in the mid tones, and
+random, so two developers' grain never agrees pixel for pixel. Darkrooms and the camera therefore
+give the same grain at any size, the clumps as wide as the print's width allows.
 
 **10. The file.** A JPEG at quality 92, colour at half size each way (4:2:0), sRGB.
 
@@ -109,8 +116,8 @@ same frame with the darkroom at its Large size, reduces both pictures to 30 × 2
 compares the blocks: plain dE2000, the mean and the worst block.
 
 The provisional limit for "the same picture" is 1 on the mean and 3 at the worst block. For scale, the
-darkroom against itself at another size, on the sample with Kodak Gold 200: Large against Medium is 0.33
-and 1.31, Large against Small 0.59 and 2.45. So a mean under about 0.3 cannot be asked of two pictures
+darkroom against itself at another size, on the sample with Kodak Gold 200: Large against Medium is 0.34
+and 1.67, Large against Small 0.62 and 3.16. So a mean under about 0.3 cannot be asked of two pictures
 of different sizes; what is left at that level is grain, the glow's grid and the JPEG.
 
 Darkrooms is closed source. Its pictures are compared here, and only the numbers go back to #132.

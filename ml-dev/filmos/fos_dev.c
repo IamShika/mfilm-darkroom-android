@@ -397,7 +397,7 @@ struct fos_dev
     uint8_t thumb[FOS_THUMB_W * FOS_THUMB_H * 3];
     int16_t vig_x[FOS_PRINT_W], vig_y[FOS_PRINT_H];
     uint8_t gx[FOS_PRINT_W], fx[FOS_PRINT_W];   /* glow cell and weight (1/8) per column */
-    unsigned seed;
+    unsigned seed;                      /* the grain's, seeded per frame: the same frame develops alike */
     uint16_t pos[3 * FOS_PRINT_W];      /* a row's positions on the film's grid */
 
     /* palette */
@@ -1643,11 +1643,18 @@ static void setup_colour(struct fos_dev *d)
     for (int k = 1; k < NMAX; k++) recip[k] = 65536 / k;
 }
 
-/* small, fast noise */
-FOS_INLINE int rnd(unsigned *s)
+/* small, fast noise: the draw at one point (i, j) of the grain's lattice (#104), for
+ * field c, from the frame's seed. Any point can be drawn on its own, so a row of the
+ * print asks for the clumps about it and nothing has to be kept between rows. */
+FOS_INLINE int draw(unsigned seed, int i, int j, int c)
 {
-    *s = *s * 1664525u + 1013904223u;
-    return (int) (*s >> 16 & 0xFFFF) - 32768;
+    unsigned h = seed ^ (unsigned) i * 0x9e3779b1u ^ (unsigned) j * 0x85ebca77u ^ (unsigned) c * 0xc2b2ae3du;
+    h ^= h >> 15;
+    h *= 0x2545f491u;
+    h ^= h >> 13;
+    h *= 0x9e3779b1u;
+    h ^= h >> 16;
+    return (int) (h >> 16) - 32768;
 }
 
 /* ---------------------------------------------------------------- palette */
@@ -2300,24 +2307,76 @@ static __attribute__((noinline)) void finish_lut(const uint16_t *pos, uint8_t *o
         lut_apply(lut, pos[0], pos[1], pos[2], o);
 }
 
-/* grain at screen size: the lab's, softened by the downscale (grain: its
- * strength), strongest in the mid tones */
-static __attribute__((noinline)) unsigned finish_grain(uint8_t *o, int n, unsigned seed, int grain, int mono)
+/* The grain is drawn the way the lab draws it: a draw at every print pixel, spread over its
+ * neighbours by a Gaussian of the film stock's grain_size -- full-resolution pixels, so a print
+ * w of a frame full wide spreads its grain w/full as far -- and added strongest in the mid tones.
+ * A clump narrower than a print pixel is still a softer grain than a draw a pixel, which is what
+ * the camera did at every size until now: a 3200 film stock's grain came out as fine as a 100's,
+ * where the lab gives each its own (#104, #186). The spread takes the strength of a draw a pixel
+ * off, and the strength is up by what it takes (grain_blur), as the lab's own normalising does. */
+#define GRAIN_SPREAD    77          /* the most a spread carries of the four about a pixel, 1/256,
+                                     * so the pixel keeps the greater part of its own draw */
+
+/* sigma^2: the spread on a print w pixels wide of a frame full wide, as the weight of the two
+ * pixels beside one, 1/256 */
+static int grain_clump(const struct fos_look *L, int w, int full)
 {
-    for (uint8_t *e = o + 3 * n; o < e; o += 3)
+    float sigma = L->grain_size * (float) w / (float) full, a = 0.5f * sigma * sigma;
+    if (a > (float) GRAIN_SPREAD / 256.0f) a = (float) GRAIN_SPREAD / 256.0f;
+    return (int) (256.0f * a + 0.5f);
+}
+
+/* what the spread takes off the grain's strength: the pixel's weight and the two beside it, their
+ * squares, along the row and down it */
+static float grain_blur(int a)
+{
+    int w0 = 256 - 2 * a;
+    return 65536.0f / (float) (w0 * w0 + 2 * a * a);
+}
+
+/* n pixels of row y from o, the print's column x0: the grain, the draws of the nine pixels about
+ * the pixel spread together, for one field, or one shared and one for each colour */
+static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned seed, int grain, int mono,
+                                                   int x0, int y, int a)
+{
+    const int nf = mono ? 1 : 4, w0 = 256 - 2 * a, wa = a;
+    for (uint8_t *e = o + 3 * n; o < e; o += 3, x0++)
     {
-        int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8;
-        int wgt = (l * (255 - l)) >> 6;
-        int shared = rnd(&seed);
-        for (int c = 0; c < 3; c++)
+        int k[4];
+        for (int f = 0; f < nf; f++)
         {
-            int k = mono ? shared : (shared * 3 + rnd(&seed) * 2) / 4;
-            int v = o[c] + (int) (((long) k * grain >> 15) * wgt >> 16);
-            o[c] = (uint8_t) (v < 0 ? 0 : v > 255 ? 255 : v);
+            /* the row above, this one and the one below, each the three pixels about x0 (the 8
+             * bits off each keeps the products in 32) */
+            int up = (w0 * draw(seed, x0, y - 1, f) + wa * (draw(seed, x0 - 1, y - 1, f) + draw(seed, x0 + 1, y - 1, f))) >> 8;
+            int mid = (w0 * draw(seed, x0, y, f) + wa * (draw(seed, x0 - 1, y, f) + draw(seed, x0 + 1, y, f))) >> 8;
+            int dn = (w0 * draw(seed, x0, y + 1, f) + wa * (draw(seed, x0 - 1, y + 1, f) + draw(seed, x0 + 1, y + 1, f))) >> 8;
+            k[f] = (w0 * mid + wa * (up + dn)) >> 8;
+        }
+        const int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8, wgt = (l * (255 - l)) >> 6;
+        for (int ch = 0; ch < 3; ch++)
+        {
+            int shared = mono ? k[0] : (k[0] * 3 + k[ch + 1] * 2) >> 2;
+            int v = o[ch] + (int) (((long) shared * grain >> 15) * wgt >> 16);
+            o[ch] = (uint8_t) (v < 0 ? 0 : v > 255 ? 255 : v);
         }
     }
-    return seed;
 }
+
+#ifdef FOS_DEV_TEST
+/* the look's clump on a print w pixels wide of a frame full wide, for graintest */
+int fos_dev_test_grain_clump(const struct fos_look *f, int w, int full) { return grain_clump(f, w, full); }
+
+/* the grain alone, for graintest: h rows of w pixels at the film stock's strength, in the
+ * mid tones' grey (no picture about it) */
+void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono)
+{
+    for (int y = 0; y < h; y++)
+    {
+        memset(o + 3 * y * w, 120, 3 * w);
+        finish_grain(o + 3 * y * w, w, 12345u, (int) (grain * grain_blur(c)), mono, 0, y, c);
+    }
+}
+#endif
 
 /* row y of the print: vignette, halation, the film's table, grain */
 static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
@@ -2350,8 +2409,9 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
     finish_pos(d->lin + 3 * (y * W + px0), d->pos, pw, 4096 - d->vig_y[y], d->vig_x,
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal, (int) (L->hal_thr * 4096));
     finish_lut(d->pos, o + 3 * px0, pw);
-    int grain = (int) (L->grain * 255 * 0.55f * 256);
-    if (grain) d->seed = finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono);
+    int c = grain_clump(L, W, d->rows_axis_x ? d->crop_h : d->crop_w);
+    int grain = (int) (L->grain * 255 * 0.55f * 256 * grain_blur(c));
+    if (grain) finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono, px0, y, c);
 }
 
 /* the thumbnail: 6 x 6 boxes, a row of them at a time */
@@ -2527,35 +2587,6 @@ static __attribute__((noinline)) void big_dither(struct fos_dev *d, const uint8_
     }
 }
 
-/* finish_grain for the big print's rows, which are most of its work: one
- * draw of the generator a pixel in place of four (the channels' own shares
- * are that draw multiplied apart), the strength and the tone's weight in one
- * product. The same grain to the eye; not the same numbers. */
-static __attribute__((noinline)) unsigned big_grain(uint8_t *o, int n, unsigned seed, int grain, int mono)
-{
-    for (uint8_t *e = o + 3 * n; o < e; o += 3)
-    {
-        int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8;
-        int gw = (grain * ((l * (255 - l)) >> 6)) >> 8;
-        seed = seed * 1664525u + 1013904223u;
-        int shared = (int) (seed >> 16) - 32768;
-        int k0 = shared, k1 = shared, k2 = shared;
-        if (!mono)
-        {
-            k0 = (shared * 3 + ((int) ((seed * 2654435761u) >> 16) - 32768) * 2) >> 2;
-            k1 = (shared * 3 + ((int) ((seed * 2246822519u) >> 16) - 32768) * 2) >> 2;
-            k2 = (shared * 3 + ((int) ((seed * 3266489917u) >> 16) - 32768) * 2) >> 2;
-        }
-        int v = o[0] + ((k0 * gw) >> 23);
-        o[0] = (uint8_t) (v < 0 ? 0 : v > 255 ? 255 : v);
-        v = o[1] + ((k1 * gw) >> 23);
-        o[1] = (uint8_t) (v < 0 ? 0 : v > 255 ? 255 : v);
-        v = o[2] + ((k2 * gw) >> 23);
-        o[2] = (uint8_t) (v < 0 ? 0 : v > 255 ? 255 : v);
-    }
-    return seed;
-}
-
 /* row y of the big print into rgb: as stage_expose and stage_finish do a
  * row of the screen's, from its own sums, with the exposure and the glow
  * the screen's print found */
@@ -2585,8 +2616,9 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
     finish_pos(d->blin, d->bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
                (int) (L->hal_thr * 4096));
     finish_lut(d->bcam, rgb, bw);
-    int grain = (int) (L->grain * 255 * 0.55f * 256);
-    if (grain) d->seed = big_grain(rgb, bw, d->seed, grain, L->mono);
+    int c = grain_clump(L, bw, d->rows_axis_x ? d->crop_h : d->crop_w);
+    int grain = (int) (L->grain * 255 * 0.55f * 256 * grain_blur(c));
+    if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, c);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
 }
 

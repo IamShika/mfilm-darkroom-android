@@ -48,7 +48,9 @@ jobs:
       - name: Python for the film tables
         run: python -m pip install -q numpy scipy pillow rawpy
       - name: Build the simulator
-        run: make -C ml-dev/filmos/sim out/sim out/devtest out/mkcr2 out/tables/TABLES.txt
+        run: make -C ml-dev/filmos/sim out/sim out/devtest out/graintest out/mkcr2 out/tables/TABLES.txt
+      - name: The grain the darkroom draws
+        run: ml-dev/filmos/sim/out/graintest
       - name: Develop the problem rolls
         run: bash ml-dev/filmos/sim/cardtest.sh
       - name: The darkroom's colour against LibRaw
