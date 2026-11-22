@@ -37,9 +37,9 @@ static void ok(const char *what, int pass, const char *detail)
 
 /* the grain drawn: its strength in levels, and how much a pixel's grain agrees with the one
  * beside it (the clump's width) and with the one two along */
-static void measure(int mono, int c, double *strength, double *r1, double *r2)
+static void measure(int mono, int c, int level, double *strength, double *r1, double *r2)
 {
-    fos_dev_test_grain(print, W, H, c, 1330, mono);
+    fos_dev_test_grain(print, W, H, c, 2400, mono, level);
     double m = 0, v = 0, c1 = 0, c2 = 0;
     long n = 0;
     for (int y = 0; y < H; y++)
@@ -69,10 +69,10 @@ int main(void)
     for (int m = 0; m < 2; m++)
     {
         double s0, r1, r2, s, a1, a2;
-        measure(mono[m], 1, &s0, &r1, &r2);
+        measure(mono[m], 1, 120, &s0, &r1, &r2);
         for (unsigned i = 1; i < sizeof(cs) / sizeof(cs[0]); i++)
         {
-            measure(mono[m], cs[i], &s, &a1, &a2);
+            measure(mono[m], cs[i], 120, &s, &a1, &a2);
             snprintf(b, sizeof(b), "%s clump of %d/256: %.2f levels against %.2f at a draw a pixel",
                      mono[m] ? "mono" : "colour", cs[i], s, s0);
             ok("the same strength", s > s0 * 0.85 && s < s0 * 1.15, b);
@@ -85,11 +85,26 @@ int main(void)
         double s, a1, a2, prev = -1;
         for (int c = 1; c <= 24; c++)
         {
-            measure(mono[m], c, &s, &a1, &a2);
+            measure(mono[m], c, 120, &s, &a1, &a2);
             snprintf(b, sizeof(b), "%s, %d/256: %.3f (was %.3f at less)", mono[m] ? "mono" : "colour", c, a1, prev);
             ok("clumps wider with the size", a1 > prev, b);
             prev = a1;
         }
+    }
+
+    /* the weight the grain is added by is the lab's, strongest in the mid tones:
+     * 160/247 at 40, 206/247 at 190 (#104, #186) */
+    {
+        double s40, s96, s190, d1, d2;
+        measure(0, 1, 40, &s40, &d1, &d2);
+        measure(0, 1, 96, &s96, &d1, &d2);
+        measure(0, 1, 190, &s190, &d1, &d2);
+        snprintf(b, sizeof(b), "40: %.2f, 96: %.2f, 190: %.2f levels", s40, s96, s190);
+        ok("the weight is a dome over the tones", s96 > s40 * 1.4 && s96 > s190 * 1.1, b);
+        snprintf(b, sizeof(b), "%.2f levels against the mid tones' %.2f, the lab's 160/247", s40, s96);
+        ok("the weight over the shadows is the lab's", fabs(s40 - s96 * 160.0 / 247.0) < s96 * 0.05, b);
+        snprintf(b, sizeof(b), "%.2f levels against the mid tones' %.2f, the lab's 206/247", s190, s96);
+        ok("the weight at 190 is the lab's", fabs(s190 - s96 * 206.0 / 247.0) < s96 * 0.05, b);
     }
 
     /* and a clump is not a pattern: no alternation of the grain */
@@ -97,7 +112,7 @@ int main(void)
         for (int c = 1; c <= 24; c += 1)
         {
             double s, a1, a2;
-            measure(mono[m], c, &s, &a1, &a2);
+            measure(mono[m], c, 120, &s, &a1, &a2);
             if (a2 <= -0.05)
             {
                 snprintf(b, sizeof(b), "%s, %d/256: %.3f at two", mono[m] ? "mono" : "colour", c, a2);

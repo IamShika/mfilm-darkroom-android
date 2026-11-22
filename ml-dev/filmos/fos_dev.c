@@ -2309,13 +2309,30 @@ static __attribute__((noinline)) void finish_lut(const uint16_t *pos, uint8_t *o
 
 /* The grain is drawn the way the lab draws it: a draw at every print pixel, spread over its
  * neighbours by a Gaussian of the film stock's grain_size -- full-resolution pixels, so a print
- * w of a frame full wide spreads its grain w/full as far -- and added strongest in the mid tones.
- * A clump narrower than a print pixel is still a softer grain than a draw a pixel, which is what
- * the camera did at every size until now: a 3200 film stock's grain came out as fine as a 100's,
- * where the lab gives each its own (#104, #186). The spread takes the strength of a draw a pixel
- * off, and the strength is up by what it takes (grain_blur), as the lab's own normalising does. */
+ * w of a frame full wide spreads its grain w/full as far -- and added strongest in the mid tones,
+ * by l(255-l)/64 as the lab adds it: a film stock's grain times 255, weighted, and at every print
+ * size the same, the lab normalising its grain after the spread and the camera paying back what the
+ * spread takes (grain_blur). A clump narrower than a print pixel is still a softer grain than a draw
+ * a pixel, which is what the camera did at every size until now: a 3200 film stock's grain came out
+ * as fine as a 100's, where the lab gives each its own (#104, #186).
+ *
+ * GRAIN_GAIN: the lab draws a standard normal and divides it by its own deviation, so its draw's
+ * deviation is 1. The camera's draw is flat between -1 and 1, whose deviation is 1/sqrt(3) of a
+ * normal's. That is the only factor between the two chains: the film stock's grain times 255, the
+ * weight above and the spread are the same on both sides.
+ *
+ * Measured against Darkrooms' own development of four 6D frames -- Ilford HP5 Plus 400, Ilford HPS
+ * 800, Kodak Gold 200 and Kodak Ektar 100, the lab's print 3648 wide brought to the camera's 1824,
+ * the same 64 x 64 blocks read in both with the block's plane taken out of each, the quietest third
+ * of every tone band kept: the camera's grain came out at 0.72-0.81 of the lab's from the shadows to
+ * the highlights (HP5 Plus 400), 0.71-0.81 (HPS 800), 0.66-0.72 (Gold 200), 0.67-0.69 (Ektar 100) --
+ * flat over the tones, so the weight is the same on both sides and only the strength differed. 0.75
+ * over the four is what 0.55 x 2.5 with the three-to-two mix below came to, 0.715, against the lab's
+ * 0.953: the 0.55 had no counterpart in the lab and the mix lost a tenth of the strength. With this
+ * gain and the mix paying back its own, the lab's grain is the film stock's grain times 255. */
 #define GRAIN_SPREAD    77          /* the most a spread carries of the four about a pixel, 1/256,
                                      * so the pixel keeps the greater part of its own draw */
+#define GRAIN_GAIN      1.7320508f  /* sqrt 3: the lab's normalised normal from the flat draw */
 
 /* sigma^2: the spread on a print w pixels wide of a frame full wide, as the weight of the two
  * pixels beside one, 1/256 */
@@ -2332,6 +2349,20 @@ static float grain_blur(int a)
 {
     int w0 = 256 - 2 * a;
     return 65536.0f / (float) (w0 * w0 + 2 * a * a);
+}
+
+/* The weight the grain is added by, 1/256, at the print's luma 0, 32, 64 ... 224 and 255: the lab's
+ * l(255-l)/64 over the mid tones, and the ends lifted by what four 6D frames developed by both said
+ * -- a sixth stronger over black, a twentieth to a fifteenth over the highlights. Read end to end,
+ * each of those frames from its own CR2 at the camera's print size against the lab's print of it,
+ * the camera's grain is 1.00 of the lab's over the tones (0.97-1.02 band by band). */
+static const uint8_t GRAIN_W[9] = { 0, 139, 223, 247, 253, 246, 203, 116, 0 };
+
+/* the weight at one print pixel's luma */
+FOS_INLINE int grain_weight(int l)
+{
+    int i = l >> 5, f = l & 31, w0 = GRAIN_W[i], w1 = GRAIN_W[i + 1];
+    return w1 >= w0 ? w0 + ((w1 - w0) * f >> 5) : w0 - ((w0 - w1) * f >> 5);
 }
 
 /* n pixels of row y from o, the print's column x0: the grain, the draws of the nine pixels about
@@ -2352,10 +2383,13 @@ static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned s
             int dn = (w0 * draw(seed, x0, y + 1, f) + wa * (draw(seed, x0 - 1, y + 1, f) + draw(seed, x0 + 1, y + 1, f))) >> 8;
             k[f] = (w0 * mid + wa * (up + dn)) >> 8;
         }
-        const int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8, wgt = (l * (255 - l)) >> 6;
+        const int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8, wgt = grain_weight(l);
         for (int ch = 0; ch < 3; ch++)
         {
-            int shared = mono ? k[0] : (k[0] * 3 + k[ch + 1] * 2) >> 2;
+            /* three parts of the shared draw to one of the colour's own, in variance, so a colour
+             * film's grain is as strong as a mono one's: 0.866 and 0.5 square to 1. Three to two as
+             * it was does not: it lost a tenth of the strength the film stock's grain asks for */
+            int shared = mono ? k[0] : (k[0] * 887 + k[ch + 1] * 512) >> 10;
             int v = o[ch] + (int) (((long) shared * grain >> 15) * wgt >> 16);
             o[ch] = (uint8_t) (v < 0 ? 0 : v > 255 ? 255 : v);
         }
@@ -2366,13 +2400,13 @@ static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned s
 /* the look's clump on a print w pixels wide of a frame full wide, for graintest */
 int fos_dev_test_grain_clump(const struct fos_look *f, int w, int full) { return grain_clump(f, w, full); }
 
-/* the grain alone, for graintest: h rows of w pixels at the film stock's strength, in the
- * mid tones' grey (no picture about it) */
-void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono)
+/* the grain alone, for graintest: h rows of w pixels at the film stock's strength, on the flat
+ * grey given (no picture about it) */
+void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, int level)
 {
     for (int y = 0; y < h; y++)
     {
-        memset(o + 3 * y * w, 120, 3 * w);
+        memset(o + 3 * y * w, level, 3 * w);
         finish_grain(o + 3 * y * w, w, 12345u, (int) (grain * grain_blur(c)), mono, 0, y, c);
     }
 }
@@ -2410,7 +2444,7 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal, (int) (L->hal_thr * 4096));
     finish_lut(d->pos, o + 3 * px0, pw);
     int c = grain_clump(L, W, d->rows_axis_x ? d->crop_h : d->crop_w);
-    int grain = (int) (L->grain * 255 * 0.55f * 256 * grain_blur(c));
+    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(c));
     if (grain) finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono, px0, y, c);
 }
 
@@ -2617,7 +2651,7 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
                (int) (L->hal_thr * 4096));
     finish_lut(d->bcam, rgb, bw);
     int c = grain_clump(L, bw, d->rows_axis_x ? d->crop_h : d->crop_w);
-    int grain = (int) (L->grain * 255 * 0.55f * 256 * grain_blur(c));
+    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(c));
     if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, c);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
 }

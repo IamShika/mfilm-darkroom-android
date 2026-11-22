@@ -87,6 +87,32 @@ The spread takes the strength of a draw a pixel off it, and the strength is up b
 random, so two developers' grain never agrees pixel for pixel. Darkrooms and the camera therefore
 give the same grain at any size, the clumps as wide as the print's width allows.
 
+The lab's grain strength is the film stock's `grain` times 255, drawn once as a normalised normal,
+added by a weight that is `l(255-l)/64` over the mid tones, and held at that strength whatever the
+print's size (on an HP5 Plus frame: 6.02 levels at 3648, 5.97 at 1824). A draw of the camera's is flat between -1 and 1, whose deviation
+is 1/sqrt(3) of that normal's; `GRAIN_GAIN` (sqrt 3) is that and nothing else, so a film stock's
+grain is multiplied by nothing between the two chains.
+
+Measured against Darkrooms' own development of four 6D frames -- Ilford HP5 Plus 400, Ilford HPS
+800, Kodak Gold 200 and Kodak Ektar 100, the lab's print 3648 wide brought to the camera's 1824, the
+same 64 x 64 blocks read in both with each block's plane taken out and the quietest third of every
+tone band kept: with the strength the camera had (0.55 x 2.5, and a three-to-two colour mix that lost
+a tenth) its grain came out at 0.72-0.81 of the lab's (HP5 Plus 400), 0.71-0.81 (HPS 800), 0.66-0.72
+(Gold 200) and 0.67-0.69 (Ektar 100), flat from the shadows to the highlights -- so the weight is the
+same on both sides and only the strength was wrong. The 0.55 had no counterpart in the lab at all.
+With the gain the flat draw's 1/sqrt(3) and the mix's weights squaring to 1 (0.866 and 0.5), the
+lab's grain is the film stock's grain times 255.
+
+The weight's ends are the lab's as well, and measured: over black the lab's grain is a sixth stronger
+than `l(255-l)/64` asks, and over the highlights a twentieth to a fifteenth. `GRAIN_W` in `fos_dev.c`
+is that curve in 1/256, read off the same blocks.
+
+The same four frames are the check on the whole chain: each developed from its own CR2, by the
+simulator, at the size the camera prints (half the sensor, 1824 x 2736), against the lab's print of
+it -- the camera's grain is 1.00 of the lab's over the tones, 0.97-1.02 band by band: 1.00-1.04 (HP5
+Plus 400), 1.00-1.05 (HPS 800), 0.97-1.07 (Gold 200) and 0.92-0.96 (Ektar 100), the last of which has
+2 levels of grain, where the print's quantising is as much of the number as the film's.
+
 **10. The file.** A JPEG at quality 92, colour at half size each way (4:2:0), sRGB.
 
 Steps 1 to 5 and 8 are the colour. They are what #119 means by "the same steps before the table" and

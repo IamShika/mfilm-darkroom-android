@@ -45,7 +45,7 @@ void fos_film_color(const struct fos_look *f, const float lin[3], float out[3]);
 /* the grain the look draws on a print w pixels wide of a frame full wide, and how far it
  * spreads, for graintest (a bigger print's clumps wider, as on paper) */
 int  fos_dev_test_grain_clump(const struct fos_look *f, int w, int full);
-void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono);
+void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, int level);
 #endif
 
 /* ---------------------------------------------------------------- prints */
