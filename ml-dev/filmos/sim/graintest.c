@@ -3,9 +3,9 @@
  *   ./out/graintest
  *
  * A film stock's look gives a strength (grain) and a clump width (grain_size). The print's
- * grain has to be as strong at every clump width, its clumps as wide as the film stock's on
- * a print a third of the frame wide and wider on a bigger print, and a clump must not turn
- * into a pattern of its own (no alternation: #104).
+ * grain has to be as strong at every clump width, its clumps as wide as Darkrooms draws them
+ * -- grain_size against the frame's short side, so wider on a bigger print -- and a clump must
+ * not turn into a pattern of its own (no alternation: #104).
  */
 
 #include <stdio.h>
@@ -33,6 +33,26 @@ static void ok(const char *what, int pass, const char *detail)
 {
     if (!pass) fail = 1;
     printf("%s  %s%s%s\n", pass ? "ok  " : "FAIL", what, *detail ? ": " : "", detail);
+}
+
+/* Darkrooms' grain profile, read off its own prints of the same frames at 2736 x 1824 and
+ * 5472 x 3648 (three film stocks at both sizes): at u = lag / clump, how much a pixel's grain
+ * agrees with the one u clumps along. It is the same shape at every film stock and every size. */
+static const double RHO[][2] = {
+    { 0.0, 1.000 }, { 0.5, 0.887 }, { 0.667, 0.761 }, { 0.75, 0.699 }, { 1.0, 0.653 },
+    { 1.333, 0.442 }, { 1.5, 0.400 }, { 2.0, 0.242 }, { 2.5, 0.104 }, { 3.0, 0.088 },
+    { 3.5, 0.060 }, { 4.0, 0.039 }, { 5.0, 0.008 }, { 6.0, 0.002 }, { 8.0, 0.0 }
+};
+
+static double rho(double u)
+{
+    unsigned n = sizeof(RHO) / sizeof(RHO[0]);
+    if (u <= RHO[0][0]) return RHO[0][1];
+    for (unsigned i = 1; i < n; i++)
+        if (u <= RHO[i][0])
+            return RHO[i - 1][1] + (RHO[i][1] - RHO[i - 1][1]) *
+                   (u - RHO[i - 1][0]) / (RHO[i][0] - RHO[i - 1][0]);
+    return 0.0;
 }
 
 /* the grain drawn: its strength in levels, and how much a pixel's grain agrees with the one
@@ -80,17 +100,17 @@ int main(void)
         }
     }
 
-    /* and the clump drawn is the clump asked for: its agreement with the pixel beside it is the
-     * Gaussian's, exp(-1/(2 sigma^2)), and with the one two along exp(-2/sigma^2), from a quarter of
-     * a pixel to a pixel and a half (#104) */
+    /* and the clump drawn is Darkrooms': its agreement with the pixel beside it and with the one
+     * two along is the profile read off Darkrooms' prints at that clump, from a quarter of a pixel
+     * to a pixel and a half (#104) */
     for (unsigned i = 1; i < sizeof(cs) / sizeof(cs[0]) && cs[i] <= 384; i++)
     {
         double s, a1, a2, sd = cs[i] / 256.0;
         measure(0, cs[i], 120, &s, &a1, &a2);
-        double want1 = exp(-1 / (2 * sd * sd)), want2 = exp(-2 / (sd * sd));
-        snprintf(b, sizeof(b), "sigma %.2f px: %.3f against %.3f at one, %.3f against %.3f at two",
+        double want1 = rho(1.0 / sd), want2 = rho(2.0 / sd);
+        snprintf(b, sizeof(b), "clump %.2f px: %.3f against Darkrooms' %.3f at one, %.3f against %.3f at two",
                  sd, a1, want1, a2, want2);
-        ok("the clump is the sigma asked for", fabs(a1 - want1) < 0.12 && fabs(a2 - want2) < 0.12, b);
+        ok("the clump is the one Darkrooms draws", fabs(a1 - want1) < 0.06 && fabs(a2 - want2) < 0.06, b);
     }
 
     /* the clumps are the film stock's: a wider one agrees more with its neighbour */
@@ -150,12 +170,12 @@ int main(void)
         else
         {
             int f, s;
-            f = fos_dev_test_grain_clump(fast, 1728, 5184);
-            s = fos_dev_test_grain_clump(slow, 1728, 5184);
+            f = fos_dev_test_grain_clump(fast, 1728, 3456);
+            s = fos_dev_test_grain_clump(slow, 1728, 3456);
             snprintf(b, sizeof(b), "trix400 %d/256 of a pixel, ektar100 %d/256, on a third of the frame", f, s);
             ok("the coarser stock's grain is wider", f > s, b);
 
-            int f3 = fos_dev_test_grain_clump(fast, 2592, 5184), s3 = fos_dev_test_grain_clump(slow, 2592, 5184);
+            int f3 = fos_dev_test_grain_clump(fast, 2592, 3456), s3 = fos_dev_test_grain_clump(slow, 2592, 3456);
             snprintf(b, sizeof(b), "large: trix400 %d/256 of a pixel, ektar100 %d/256", f3, s3);
             ok("a bigger print shows the same grain wider", f3 > f && s3 > s, b);
 
@@ -164,8 +184,8 @@ int main(void)
             ok("in step with the print's width", (f3 * 10 > f * 14 && f3 * 10 < f * 16), b);
 
             snprintf(b, sizeof(b), "a print smaller than a twelfth of the frame: %d/256 of a pixel",
-                     fos_dev_test_grain_clump(slow, 400, 5184));
-            ok("no clump at all where the print can't show it", fos_dev_test_grain_clump(slow, 400, 5184) <= 26, b);
+                     fos_dev_test_grain_clump(slow, 400, 3456));
+            ok("no clump at all where the print can't show it", fos_dev_test_grain_clump(slow, 400, 3456) <= 26, b);
         }
     }
 

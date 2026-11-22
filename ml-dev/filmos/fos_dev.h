@@ -25,9 +25,9 @@ struct fos_look
     int nhues;
     struct fos_hue_shift hues[4];
     float halation, hal_thr, hal_tint[3];
-    float grain, grain_size;    /* the grain's strength at the mid tones, and its clump,
-                                 * full-resolution pixels: a print 1/n of the frame's width
-                                 * has clumps 1/n as wide (as the lab draws them) */
+    float grain, grain_size;    /* the grain's strength at the mid tones, and its clump, in
+                                 * pixels of the frame's short side: a print 1/n of that has
+                                 * clumps 1/n as wide (as Darkrooms draws them) */
     int mono;
     float mono_mix[3];
 };
@@ -42,8 +42,8 @@ const struct fos_look *fos_look_of(const char *key);
  * the print, display sRGB 0..1. Same model as film_color() in the lab. */
 void fos_film_color(const struct fos_look *f, const float lin[3], float out[3]);
 #ifdef FOS_DEV_TEST
-/* the grain the look draws on a print w pixels wide of a frame full wide, and how far it
- * spreads, for graintest (a bigger print's clumps wider, as on paper) */
+/* the grain the look draws on a print w pixels wide, and how far it spreads, for graintest
+ * (a bigger print's clumps wider, as on paper: the width over the frame's short side) */
 int  fos_dev_test_grain_clump(const struct fos_look *f, int w, int full);
 void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, int level);
 #endif

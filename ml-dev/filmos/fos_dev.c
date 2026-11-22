@@ -2307,78 +2307,106 @@ static __attribute__((noinline)) void finish_lut(const uint16_t *pos, uint8_t *o
         lut_apply(lut, pos[0], pos[1], pos[2], o);
 }
 
-/* The grain is drawn the way the lab draws it: a draw at every print pixel, spread over its
- * neighbours by a Gaussian of the film stock's grain_size -- full-resolution pixels, so a print
- * w of a frame full wide spreads its grain w/full as far -- and added strongest in the mid tones,
- * by l(255-l)/64 as the lab adds it: a film stock's grain times 255, weighted, and at every print
- * size the same, the lab normalising its grain after the spread and the camera paying back what the
- * spread takes (grain_blur). A clump narrower than a print pixel is still a softer grain than a draw
- * a pixel, which is what the camera did at every size until now: a 3200 film stock's grain came out
- * as fine as a 100's, where the lab gives each its own (#104, #186).
+/* The grain is drawn the way Darkrooms draws it: a draw at every print pixel, spread over its
+ * neighbours, and added strongest in the mid tones, by l(255-l)/64 as Darkrooms adds it -- a film
+ * stock's grain times 255, weighted, and at every print size the same, Darkrooms normalising its
+ * grain after the spread and the camera paying back what the spread takes (grain_blur). Two things
+ * about the drawing were read off Darkrooms' own prints of the same frames, one film stock and one
+ * print size at a time, its grain and the camera's developed from one CR2:
+ *
+ *   the clump   Darkrooms' clump is grain_size * w / 3648 on a print w pixels wide. 3648 is the 6D
+ *               frame's short side, so grain_size is in short-side pixels and a print half the
+ *               frame's width draws clumps half as wide. The camera read it against the frame's
+ *               *width* instead, leaving every clump 1.5 times too narrow, and then spread it by a
+ *               sigma this code meant as a correlation rather than a clump, taking another sqrt 2
+ *               off it: the camera's grain came out 2.1 times too fine, gritty where Darkrooms has
+ *               soft clumps (#104, #186).
+ *
+ *   the shape   Darkrooms' clump is not a Gaussian. Read at u = lag / clump its profile is the same
+ *               for every film stock and every print size -- 0.65 at u = 1, 0.24 at 2, 0.09 at 3,
+ *               0.04 at 4 -- with a tail that runs further than a Gaussian's, which five taps a
+ *               pixel apart cannot hold: their correlation dies at three pixels. Seven do.
  *
  * GRAIN_GAIN: the lab draws a standard normal and divides it by its own deviation, so its draw's
  * deviation is 1. The camera's draw is flat between -1 and 1, whose deviation is 1/sqrt(3) of a
  * normal's. That is the only factor between the two chains: the film stock's grain times 255, the
  * weight above and the spread are the same on both sides.
  *
- * Measured against Darkrooms' own development of four 6D frames -- Ilford HP5 Plus 400, Ilford HPS
- * 800, Kodak Gold 200 and Kodak Ektar 100, the lab's print 3648 wide brought to the camera's 1824,
- * the same 64 x 64 blocks read in both with the block's plane taken out of each, the quietest third
- * of every tone band kept: the camera's grain came out at 0.72-0.81 of the lab's from the shadows to
- * the highlights (HP5 Plus 400), 0.71-0.81 (HPS 800), 0.66-0.72 (Gold 200), 0.67-0.69 (Ektar 100) --
- * flat over the tones, so the weight is the same on both sides and only the strength differed. 0.75
- * over the four is what 0.55 x 2.5 with the three-to-two mix below came to, 0.715, against the lab's
- * 0.953: the 0.55 had no counterpart in the lab and the mix lost a tenth of the strength. With this
- * gain and the mix paying back its own, the lab's grain is the film stock's grain times 255. */
-#define GRAIN_CLUMP_MAX 1.5f        /* the widest clump five taps one pixel apart can hold: past it
-                                     * the Gaussian is cut off before its tails and the clump stops
-                                     * widening whatever the film stock says */
+ * Measured on 2736 x 1824 prints of one frame -- Darkrooms' "half", which is the camera's Large --
+ * against the camera's own development of the same CR2, Darkrooms' grain taken as its half print less
+ * its full print brought down to half (nothing of the camera's in it) and the camera's as its grained
+ * print less its bare one: the two strengths came out within 5% (HP5 Plus 400: 7.6 levels against
+ * 7.3), with the tone weight matching band by band, and the clump's agreement with the pixel beside
+ * it 0.66 against the camera's 0.29. The strength was right; the clump was not. */
+#define GRAIN_CLUMP_MAX 1.5f        /* as far as the tap table reaches, a 1/32 of a pixel a step: the
+                                     * camera's Large print asks for 1.13 at the widest stock */
 #define GRAIN_GAIN      1.7320508f  /* sqrt 3: the lab's normalised normal from the flat draw */
 
-/* the clump's sigma on a print w pixels wide of a frame full wide, 1/256 of a pixel */
-static int grain_clump(const struct fos_look *L, int w, int full)
+/* the frame's short side: Darkrooms scales a print's clump by the print's width over this, not over
+ * the frame's width -- 3648 on a 6D, its 5472 x 3648 frame's short side (#104, #186) */
+FOS_INLINE int grain_ref(const struct fos_dev *d)
 {
-    float sigma = L->grain_size * (float) w / (float) full;
+    return d->crop_w < d->crop_h ? d->crop_w : d->crop_h;
+}
+
+/* the clump's sigma on a print w pixels wide, 1/256 of a pixel: the film stock's grain_size
+ * against the frame's short side, which is how Darkrooms reads it */
+static int grain_clump(const struct fos_look *L, int w, int ref)
+{
+    float sigma = L->grain_size * (float) w / (float) ref;
     if (sigma > GRAIN_CLUMP_MAX) sigma = GRAIN_CLUMP_MAX;
     return (int) (256.0f * sigma + 0.5f);
 }
 
-/* The taps that draw a Gaussian clump, 1/256, at sigma 0, 1/32, 2/32 ... 1.5 pixels: the centre,
- * the one beside it and the one two away. Fitted so that the drawn clump's correlation at one pixel
- * and at two is the Gaussian's -- exp(-1/2s^2) and exp(-2/s^2) -- which three taps hold up to a
- * sigma of 1 and no further: past that the one two away takes a part in 256 and climbs. Below a
- * sigma of 0.9 it is zero, so the ordinary clumps cost three draws a row and not five. */
-static const uint16_t GRAIN_TAP[3][49] = {
+/* The taps that draw Darkrooms' clump, 1/256, at clumps of 0, 1/32, 2/32 ... 1.5 pixels: the
+ * centre, the one beside it, and the two and the three away. Each set is fitted so the drawn
+ * clump's correlation at lags one to six is Darkrooms' own, which reads off its prints as one
+ * self-similar shape: at u = lag / clump, 0.65 at u = 1, 0.24 at 2, 0.09 at 3, 0.04 at 4. Five taps
+ * a pixel apart cannot hold that tail -- their correlation dies at three pixels -- so seven do, and
+ * what the fit costs is at worst 0.026 of the correlation, against the 0.03 the measurement itself
+ * scatters by. Below a clump of a fifth of a pixel only the centre is drawn, and a pixel of the
+ * print costs one draw rather than seven. */
+static const uint16_t GRAIN_TAP[4][49] = {
    {
-    256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 254, 252, 248, 244, 238, 232,
-    226, 218, 212, 206, 198, 192, 188, 182, 176, 172, 168, 162, 158, 154, 150, 146,
-    140, 138, 134, 132, 128, 124, 122, 118, 116, 114, 110, 108, 106, 102, 100, 100,
-    98 },
+    256, 256, 256, 256, 256, 256, 254, 252, 246, 242, 238, 236, 232, 228, 216, 206,
+    200, 200, 192, 190, 182, 174, 172, 170, 166, 162, 156, 150, 144, 138, 134, 132,
+    130, 130, 128, 126, 126, 126, 124, 122, 120, 118, 116, 112, 112, 108, 108, 104,
+    102
+   },
    {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 6, 9, 12,
-    15, 19, 22, 25, 29, 32, 34, 37, 40, 42, 44, 47, 49, 51, 53, 54,
-    56, 57, 58, 58, 59, 60, 60, 61, 61, 61, 62, 62, 62, 62, 62, 61,
-    61 },
+      0,   0,   0,   0,   0,   0,   1,   2,   5,   7,   9,  10,  12,  13,  19,  24,
+     25,  25,  27,  29,  32,  36,  37,  37,  39,  42,  44,  45,  46,  47,  48,  48,
+     50,  50,  50,  49,  49,  48,  48,  47,  46,  45,  45,  45,  45,  45,  45,  46,
+     47
+   },
    {
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-    2, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17,
-    18 }
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,   1,
+      3,   3,   4,   4,   4,   5,   5,   5,   5,   5,   6,   7,   9,  10,  11,  12,
+     11,  11,  12,  13,  13,  14,  14,  15,  16,  17,  18,  19,  19,  20,  20,  21,
+     21
+   },
+   {
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   1,   0,   1,   0,   0,   1,   1,   0,   0,   1,   1,   2,   2,   2,
+      2,   2,   2,   3,   3,   3,   4,   5,   6,   7,   7,   8,   8,   9,   9,   9,
+      9
+   }
 };
 
 /* the taps at one clump's sigma, 1/256 of a pixel */
-static void grain_taps(int sigma, int *q2, int *q1, int *q0)
+static void grain_taps(int sigma, int *q3, int *q2, int *q1, int *q0)
 {
     int k = (sigma + 4) >> 3;                   /* to the nearest 1/32 of a pixel */
     if (k < 0) k = 0;
     if (k > 48) k = 48;
-    *q2 = GRAIN_TAP[0][k]; *q1 = GRAIN_TAP[1][k]; *q0 = GRAIN_TAP[2][k];
+    *q3 = GRAIN_TAP[0][k]; *q2 = GRAIN_TAP[1][k];
+    *q1 = GRAIN_TAP[2][k]; *q0 = GRAIN_TAP[3][k];
 }
 
 /* what the spread takes off the grain's strength: the taps' squares, along the row and down it */
-static float grain_blur(int q2, int q1, int q0)
+static float grain_blur(int q3, int q2, int q1, int q0)
 {
-    return 65536.0f / (float) (q2 * q2 + 2 * (q1 * q1 + q0 * q0));
+    return 65536.0f / (float) (q3 * q3 + 2 * (q2 * q2 + q1 * q1 + q0 * q0));
 }
 
 /* The weight the grain is added by, 1/256, at the print's luma 0, 32, 64 ... 224 and 255: the lab's
@@ -2395,19 +2423,21 @@ FOS_INLINE int grain_weight(int l)
     return w1 >= w0 ? w0 + ((w1 - w0) * f >> 5) : w0 - ((w0 - w1) * f >> 5);
 }
 
-/* row r's blend about x, 1/256: the three or the five taps, by the weights grain_taps gave */
-FOS_INLINE int grain_row(unsigned seed, int x, int r, int f, int q2, int q1, int q0)
+/* row r's blend about x, 1/256: the one, the three, the five or the seven taps, by the
+ * weights grain_taps gave */
+FOS_INLINE int grain_row(unsigned seed, int x, int r, int f, int q3, int q2, int q1, int q0)
 {
-    int h = q2 * draw(seed, x, r, f);
-    if (q1) h += q1 * (draw(seed, x - 1, r, f) + draw(seed, x + 1, r, f));
-    if (q0) h += q0 * (draw(seed, x - 2, r, f) + draw(seed, x + 2, r, f));
+    int h = q3 * draw(seed, x, r, f);
+    if (q2) h += q2 * (draw(seed, x - 1, r, f) + draw(seed, x + 1, r, f));
+    if (q1) h += q1 * (draw(seed, x - 2, r, f) + draw(seed, x + 2, r, f));
+    if (q0) h += q0 * (draw(seed, x - 3, r, f) + draw(seed, x + 3, r, f));
     return h >> 8;
 }
 
 /* n pixels of row y from o, the print's column x0: the grain, the draws about the pixel spread
  * together, for one field, or one shared and one for each colour */
 static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned seed, int grain, int mono,
-                                                   int x0, int y, int q2, int q1, int q0)
+                                                   int x0, int y, int q3, int q2, int q1, int q0)
 {
     const int nf = mono ? 1 : 4;
     for (uint8_t *e = o + 3 * n; o < e; o += 3, x0++)
@@ -2417,9 +2447,10 @@ static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned s
         {
             /* this row and the two (or four) about it, each already blended along the row (the 8
              * bits off each keeps the products in 32) */
-            int v = q2 * grain_row(seed, x0, y, f, q2, q1, q0);
-            if (q1) v += q1 * (grain_row(seed, x0, y - 1, f, q2, q1, q0) + grain_row(seed, x0, y + 1, f, q2, q1, q0));
-            if (q0) v += q0 * (grain_row(seed, x0, y - 2, f, q2, q1, q0) + grain_row(seed, x0, y + 2, f, q2, q1, q0));
+            int v = q3 * grain_row(seed, x0, y, f, q3, q2, q1, q0);
+            if (q2) v += q2 * (grain_row(seed, x0, y - 1, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 1, f, q3, q2, q1, q0));
+            if (q1) v += q1 * (grain_row(seed, x0, y - 2, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 2, f, q3, q2, q1, q0));
+            if (q0) v += q0 * (grain_row(seed, x0, y - 3, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 3, f, q3, q2, q1, q0));
             k[f] = v >> 8;
         }
         const int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8, wgt = grain_weight(l);
@@ -2436,20 +2467,21 @@ static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned s
 }
 
 #ifdef FOS_DEV_TEST
-/* the look's clump on a print w pixels wide of a frame full wide, 1/256 of a pixel, for graintest */
+/* the look's clump on a print w pixels wide, against the frame's short side ref, 1/256 of a
+ * pixel, for graintest */
 int fos_dev_test_grain_clump(const struct fos_look *f, int w, int full) { return grain_clump(f, w, full); }
 
 /* the grain alone, for graintest: h rows of w pixels at the film stock's strength, on the flat
  * grey given (no picture about it), in clumps of sigma c (1/256 of a pixel) */
 void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, int level)
 {
-    int q2, q1, q0;
-    grain_taps(c, &q2, &q1, &q0);
-    grain = (int) (grain * grain_blur(q2, q1, q0));
+    int q3, q2, q1, q0;
+    grain_taps(c, &q3, &q2, &q1, &q0);
+    grain = (int) (grain * grain_blur(q3, q2, q1, q0));
     for (int y = 0; y < h; y++)
     {
         memset(o + 3 * y * w, level, 3 * w);
-        finish_grain(o + 3 * y * w, w, 12345u, grain, mono, 0, y, q2, q1, q0);
+        finish_grain(o + 3 * y * w, w, 12345u, grain, mono, 0, y, q3, q2, q1, q0);
     }
 }
 #endif
@@ -2485,10 +2517,10 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
     finish_pos(d->lin + 3 * (y * W + px0), d->pos, pw, 4096 - d->vig_y[y], d->vig_x,
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal, (int) (L->hal_thr * 4096));
     finish_lut(d->pos, o + 3 * px0, pw);
-    int c = grain_clump(L, W, d->rows_axis_x ? d->crop_h : d->crop_w), q2, q1, q0;
-    grain_taps(c, &q2, &q1, &q0);
-    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q2, q1, q0));
-    if (grain) finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono, px0, y, q2, q1, q0);
+    int c = grain_clump(L, W, grain_ref(d)), q3, q2, q1, q0;
+    grain_taps(c, &q3, &q2, &q1, &q0);
+    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    if (grain) finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono, px0, y, q3, q2, q1, q0);
 }
 
 /* the thumbnail: 6 x 6 boxes, a row of them at a time */
@@ -2693,10 +2725,10 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
     finish_pos(d->blin, d->bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
                (int) (L->hal_thr * 4096));
     finish_lut(d->bcam, rgb, bw);
-    int c = grain_clump(L, bw, d->rows_axis_x ? d->crop_h : d->crop_w), q2, q1, q0;
-    grain_taps(c, &q2, &q1, &q0);
-    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q2, q1, q0));
-    if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, q2, q1, q0);
+    int c = grain_clump(L, bw, grain_ref(d)), q3, q2, q1, q0;
+    grain_taps(c, &q3, &q2, &q1, &q0);
+    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, q3, q2, q1, q0);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
 }
 
