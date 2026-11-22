@@ -63,30 +63,46 @@ int main(void)
 {
     char b[200];
     static const int mono[2] = { 0, 1 };
-    static const int cs[] = { 1, 8, 16, 24 };
+    /* the clumps, in 1/256 of a print pixel: a draw a pixel, then a quarter of one and up */
+    static const int cs[] = { 0, 64, 128, 256, 384, 512, 640 };
 
-    /* the strength is the film stock's at every clump: a draw a pixel, then wider clumps */
+    /* the strength is the film stock's at every clump */
     for (int m = 0; m < 2; m++)
     {
         double s0, r1, r2, s, a1, a2;
-        measure(mono[m], 1, 120, &s0, &r1, &r2);
+        measure(mono[m], 0, 120, &s0, &r1, &r2);
         for (unsigned i = 1; i < sizeof(cs) / sizeof(cs[0]); i++)
         {
             measure(mono[m], cs[i], 120, &s, &a1, &a2);
-            snprintf(b, sizeof(b), "%s clump of %d/256: %.2f levels against %.2f at a draw a pixel",
+            snprintf(b, sizeof(b), "%s clump of %d/256 of a pixel: %.2f levels against %.2f at a draw a pixel",
                      mono[m] ? "mono" : "colour", cs[i], s, s0);
             ok("the same strength", s > s0 * 0.85 && s < s0 * 1.15, b);
         }
+    }
+
+    /* and the clump drawn is the clump asked for: its agreement with the pixel beside it is the
+     * Gaussian's, exp(-1/(2 sigma^2)), and with the one two along exp(-2/sigma^2), from a quarter of
+     * a pixel to a pixel and a half (#104) */
+    for (unsigned i = 1; i < sizeof(cs) / sizeof(cs[0]) && cs[i] <= 384; i++)
+    {
+        double s, a1, a2, sd = cs[i] / 256.0;
+        measure(0, cs[i], 120, &s, &a1, &a2);
+        double want1 = exp(-1 / (2 * sd * sd)), want2 = exp(-2 / (sd * sd));
+        snprintf(b, sizeof(b), "sigma %.2f px: %.3f against %.3f at one, %.3f against %.3f at two",
+                 sd, a1, want1, a2, want2);
+        ok("the clump is the sigma asked for", fabs(a1 - want1) < 0.12 && fabs(a2 - want2) < 0.12, b);
     }
 
     /* the clumps are the film stock's: a wider one agrees more with its neighbour */
     for (int m = 0; m < 2; m++)
     {
         double s, a1, a2, prev = -1;
-        for (int c = 1; c <= 24; c++)
+        /* from a clump of a third of a pixel up: below that the grain is one draw a pixel and cannot
+         * be finer, so there is nothing there to widen */
+        for (int c = 96; c <= 384; c += 32)
         {
             measure(mono[m], c, 120, &s, &a1, &a2);
-            snprintf(b, sizeof(b), "%s, %d/256: %.3f (was %.3f at less)", mono[m] ? "mono" : "colour", c, a1, prev);
+            snprintf(b, sizeof(b), "%s, %d/256 of a pixel: %.3f (was %.3f at less)", mono[m] ? "mono" : "colour", c, a1, prev);
             ok("clumps wider with the size", a1 > prev, b);
             prev = a1;
         }
@@ -109,17 +125,17 @@ int main(void)
 
     /* and a clump is not a pattern: no alternation of the grain */
     for (int m = 0; m < 2; m++)
-        for (int c = 1; c <= 24; c += 1)
+        for (int c = 0; c <= 768; c += 32)
         {
             double s, a1, a2;
             measure(mono[m], c, 120, &s, &a1, &a2);
             if (a2 <= -0.05)
             {
-                snprintf(b, sizeof(b), "%s, %d/256: %.3f at two", mono[m] ? "mono" : "colour", c, a2);
+                snprintf(b, sizeof(b), "%s, %d/256 of a pixel: %.3f at two", mono[m] ? "mono" : "colour", c, a2);
                 ok("no alternation", 0, b);
             }
         }
-    ok("no alternation", 1, "every clump 1..24/256 agrees with the one two along");
+    ok("no alternation", 1, "every clump 0..1.5 pixels agrees with the one two along");
 
     /* the looks map: a coarser stock's grain is wider on every print, on a print a third of
      * the frame wide as wide as the stock's, and wider on a bigger print */
@@ -136,20 +152,20 @@ int main(void)
             int f, s;
             f = fos_dev_test_grain_clump(fast, 1728, 5184);
             s = fos_dev_test_grain_clump(slow, 1728, 5184);
-            snprintf(b, sizeof(b), "trix400 %d/256, ektar100 %d/256, on a third of the frame", f, s);
+            snprintf(b, sizeof(b), "trix400 %d/256 of a pixel, ektar100 %d/256, on a third of the frame", f, s);
             ok("the coarser stock's grain is wider", f > s, b);
 
             int f3 = fos_dev_test_grain_clump(fast, 2592, 5184), s3 = fos_dev_test_grain_clump(slow, 2592, 5184);
-            snprintf(b, sizeof(b), "large: trix400 %d/256, ektar100 %d/256", f3, s3);
+            snprintf(b, sizeof(b), "large: trix400 %d/256 of a pixel, ektar100 %d/256", f3, s3);
             ok("a bigger print shows the same grain wider", f3 > f && s3 > s, b);
 
-            /* the spread goes with the clump's width squared, and the width with the print's */
-            snprintf(b, sizeof(b), "a third of the frame %d/256, half of it %d/256 (2.25 times at the most)", f, f3);
-            ok("in step with the print's width", f3 >= 2 * f && f3 <= 3 * f, b);
+            /* the clump's width goes with the print's, one to one */
+            snprintf(b, sizeof(b), "a third of the frame %d/256, half of it %d/256 (1.5 times)", f, f3);
+            ok("in step with the print's width", (f3 * 10 > f * 14 && f3 * 10 < f * 16), b);
 
-            snprintf(b, sizeof(b), "a print smaller than a twelfth of the frame: %d/256",
+            snprintf(b, sizeof(b), "a print smaller than a twelfth of the frame: %d/256 of a pixel",
                      fos_dev_test_grain_clump(slow, 400, 5184));
-            ok("no clump at all where the print can't show it", fos_dev_test_grain_clump(slow, 400, 5184) <= 4, b);
+            ok("no clump at all where the print can't show it", fos_dev_test_grain_clump(slow, 400, 5184) <= 26, b);
         }
     }
 

@@ -77,15 +77,24 @@ point, after an 8-byte header. Between points the table is read through the tetr
 in (`lut_apply`), not along the three axes. The place is held to 1/256 of the distance between two
 points. The result is the print: sRGB, 8 bits.
 
-**9. Grain.** The grain is drawn as the lab draws it: a draw at every print pixel, spread over
-the eight about it by a Gaussian of the film stock's `grain_size` (`finish_grain`). `grain_size` is
-in full-resolution pixels, so a print w pixels wide of a frame full wide spreads its grain w/full as
-far; a clump narrower than a print pixel is a softer grain rather than none at all, where the camera
-drew a value at every pixel and a 3200 film stock's grain came out as fine as a 100's (#104, #186).
-The spread takes the strength of a draw a pixel off it, and the strength is up by what it takes
-(`grain_blur`), as the lab's own normalising does; the noise is strongest in the mid tones, and
-random, so two developers' grain never agrees pixel for pixel. Darkrooms and the camera therefore
-give the same grain at any size, the clumps as wide as the print's width allows.
+**9. Grain.** The grain is drawn as the lab draws it: a draw at every print pixel, spread over the
+eight (or the twenty-four) about it by a Gaussian of the film stock's `grain_size` (`finish_grain`).
+`grain_size` is in full-resolution pixels, so a print w pixels wide of a frame full wide spreads its
+grain w/full as far; a clump narrower than a print pixel is a softer grain rather than none at all,
+where the camera drew a value at every pixel and a 3200 film stock's grain came out as fine as a
+100's (#104, #186). The spread takes the strength of a draw a pixel off it, and the strength is up by
+what it takes (`grain_blur`), as the lab's own normalising does; the noise is strongest in the mid
+tones, and random, so two developers' grain never agrees pixel for pixel. Darkrooms and the camera
+therefore give the same grain at any size, the clumps as wide as the print's width allows.
+
+The taps are a table, `GRAIN_TAP`, at sigma 0, 1/32, 2/32 ... 1.5 print pixels, fitted so that what
+the spread draws agrees with its neighbour at one pixel and at two as the Gaussian does, exp(-1/2s^2)
+and exp(-2/s^2): three taps hold that up to a sigma of 1 pixel, and the one two away carries the rest
+up to 1.5, which is as far as five taps one pixel apart can go. Below a sigma of 0.9 the outer taps
+are zero and the ordinary clumps cost three draws a row, not five; a Large frame, colour, 1824 x 2736,
+takes 368 ms against 336 before on the simulator, a tenth more. `graintest` reads the drawn clump's
+agreement at one and at two pixel against the Gaussian's for a quarter of a pixel to a pixel and a
+half, and the strength as exactly the film stock's at every one.
 
 The lab's grain strength is the film stock's `grain` times 255, drawn once as a normalised normal,
 added by a weight that is `l(255-l)/64` over the mid tones, and held at that strength whatever the
