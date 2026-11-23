@@ -17,9 +17,9 @@ on:
   push:
     tags: ["v*"]
     branches: ["main"]
-    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml"]
+    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml", ".github/release-darkrooms-blurb.md"]
   pull_request:
-    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml"]
+    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml", ".github/release-darkrooms-blurb.md"]
 
 permissions:
   contents: write
