@@ -6,12 +6,15 @@ What is in here: autoexec.bin, the ML/ folder and ML-SETUP.FIR, for ONE camera m
 ONE Canon firmware version (the zip's name says which, e.g. 650D.104 = EOS 650D, firmware 1.0.4).
 The 1300D's zip has no ML-SETUP.FIR: Magic Lantern doesn't make one for it. It has mlinstall instead, in
 the folder mlinstall-for-your-computer, which doesn't go on the card. See "1300D" below.
+The EOS M2's zip has no ML-SETUP.FIR either: none for the M2 can be traced to Magic Lantern's
+developers. See "EOS M2" below.
 
 Testers have tried most cameras now. How far each one got, and what's still wrong, is in the
 camera table at https://github.com/HNGSeries/mfilm-canon-film-simulation#cameras
 If nobody has tried yours yet, read TESTING.md there before you use it.
 
 Install
+  On an EOS M2, read "EOS M2" below first: its steps are different.
   1. Check the camera's Canon firmware (MENU > the last settings tab > Firmware ver.).
      It must be the version in this zip's name. If not, update Canon's firmware first.
   2. Format the card in the camera, then copy everything in this zip to its root. The card's top
@@ -34,8 +37,21 @@ Install
   c. Card back in the camera, then step 4.
   More, with what to know first: https://github.com/HNGSeries/mfilm-canon-film-simulation/blob/main/TESTING.md#canon-eos-1300d
 
+EOS M2
+  Canon's newest firmware for the M2 is 1.0.4, and M-Film needs 1.0.3: stay on 1.0.3, don't update
+  to 1.0.4. The zip has no ML-SETUP.FIR, so step 3 can't be done with it: for now it's for M2s that
+  already start Magic Lantern from a card. In place of steps 2 and 3:
+  a. Copy everything off the card your M2 already starts Magic Lantern from, to keep it. Don't format
+     the card: it has to keep its boot flags.
+  b. Delete autoexec.bin and the ML folder from the card, then copy everything in this zip to its root.
+  c. Card back in the camera, then step 4.
+  If your M2 has never run Magic Lantern: mlinstall may set it up as on the 1300D, but no one has tried
+  it on an M2 yet, and this zip doesn't carry it. If you try, tell us what happened.
+  More: https://github.com/HNGSeries/mfilm-canon-film-simulation/blob/main/TESTING.md#canon-eos-m2
+
 Update to a new version
   Don't copy a new version over the old one: files left from before can make the camera misbehave.
+  On an EOS M2, don't format the card: follow "EOS M2" above in place of steps 3 and 4.
   1. Finish the roll and develop it (in the camera or with Darkrooms).
   2. Copy your photos off the card (the DCIM folder).
   3. Format the card in the camera, and choose to remove Magic Lantern.

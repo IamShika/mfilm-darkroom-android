@@ -1,6 +1,6 @@
 # Testing M-Film on your camera
 
-M-Film was made on the **Canon EOS M**. The same code **builds** for 15 more cameras (100D, 650D,
+M-Film was made on the **Canon EOS M**. The same code **builds** for 16 more cameras (EOS M2, 100D, 650D,
 700D, 6D, 70D, 5D Mark III on two firmwares, 550D, 600D, 60D, 1100D, 1300D, 500D, 50D, 5D Mark II), and
 testers have tried most of them: the [camera table](README.md#cameras) says how far each one got and
 what's still wrong. If yours needs a first tester, or has a known problem you can check, you can help:
@@ -222,7 +222,8 @@ which camera and firmware, and whether the card light stayed on.
 
 Format the card in the camera. To stop the camera looking for Magic Lantern at all, run
 `ML-SETUP.FIR` again from *Firmware ver.* and choose to remove the boot flag. On the 1300D, connect it to
-mlinstall and **Disable Boot Disk**.
+mlinstall and **Disable Boot Disk**. On the M2 this can't be done with M-Film's zip, which has no
+`ML-SETUP.FIR`, and no one has tried mlinstall on an M2 yet.
 
 Thank you! Every camera someone tries moves it from *testing* to *working* in the
 [list on the front page](README.md#cameras).
