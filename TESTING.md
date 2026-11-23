@@ -35,6 +35,7 @@ From the [latest release](../../releases/latest) (or the newest run under *Actio
 | Canon EOS 700D / Rebel T5i / Kiss X7i | 1.1.5 | `M-Film-<version>-camera-700D.115.zip` |
 | Canon EOS 1100D / Rebel T3 / Kiss X50 | 1.0.5 | `M-Film-<version>-camera-1100D.105.zip` |
 | Canon EOS 1300D / Rebel T6 / Kiss X80 | 1.1.0 | `M-Film-<version>-camera-1300D.110.zip` |
+| Canon EOS M2 | 1.0.3 | `M-Film-<version>-camera-EOSM2.103.zip` |
 <!-- cameras:end -->
 
 The firmware must match exactly (MENU → last settings tab → *Firmware ver.*).
@@ -88,6 +89,21 @@ Good to know before you start:
   has reports of them damaging 1300Ds for good
   ([magiclantern_simplified#199](https://github.com/reticulatedpines/magiclantern_simplified/pull/199)).
   The M-Film zip leaves them out.
+
+### Canon EOS M2
+
+The M2 isn't in Magic Lantern's own source: M-Film builds it from a port made by Magic Lantern's
+community, and its zip has no `ML-SETUP.FIR`, because none for the M2 can be traced to Magic Lantern's
+developers. So step 2 above can't be done with this zip. For now it's for M2s that already start
+Magic Lantern:
+
+1. Copy everything off the card your M2 already starts Magic Lantern from, to keep it. Don't format the
+   card: it has to keep its boot flags.
+2. Delete `autoexec.bin` and the `ML` folder from the card, then copy everything from the zip to its root.
+3. Card in, camera on: the film shelf should appear. Then step 4 above.
+
+If your M2 has never run Magic Lantern, mlinstall may set it up as on the 1300D (steps 2 and 3 there),
+but no one has tried it on an M2 yet. If you try, tell us what happened. Canon's firmware must be 1.0.3.
 
 ## 3. What to try, and what to tell us
 
