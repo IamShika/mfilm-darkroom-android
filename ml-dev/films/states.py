@@ -53,7 +53,8 @@ START, END = "<!-- film-states:start -->", "<!-- film-states:end -->"
 PAGES = [("FILMS.md", "en", "docs/paired-shot.md", None), ("README.md", "en", "docs/paired-shot.md", "FILMS.md"),
          ("README.th.md", "th", "docs/paired-shot.th.md", "FILMS.md"), ("docs/MANUAL.th.md", "th", "paired-shot.th.md", "../FILMS.md")]
 # what is read for claims, besides the pages above
-TEXTS = ["site/index.html", "site/install.html", "site/js/i18n.js", "ml-dev/CAMERA-README.txt", "ml-dev/filmos/tools/catalog.py"]
+TEXTS = ["site/index.html", "site/install.html", "site/js/i18n.js", "ml-dev/CAMERA-README.txt", "ml-dev/filmos/tools/catalog.py",
+         ".github/release-darkrooms-blurb.md"]
 # words that say a film stock is its film. Checked a line at a time
 CLAIMS = [r"\btrue[- ]to[- ](life|film)\b", r"\b(match(es|ing)?|reproduc(es|ing)|identical to|accurate to|faithful to|indistinguishable from|the same as) (the |a |its |real )*(real )?film\b",
           r"\b(true|accurate|faithful|authentic) (film )?(colou?rs?|emulations?|simulations?|reproductions?)\b",
