@@ -77,8 +77,58 @@ point, after an 8-byte header. Between points the table is read through the tetr
 in (`lut_apply`), not along the three axes. The place is held to 1/256 of the distance between two
 points. The result is the print: sRGB, 8 bits.
 
-**9. Grain.** Noise is added to the print's 8-bit values, strongest in the mid tones
-(`finish_grain`). It is random, so two developers' grain never agrees pixel for pixel.
+**9. Grain.** The grain is drawn as Darkrooms draws it: a draw at every print pixel, spread over the
+draws about it (eight, twenty-four or forty-eight of them, by how wide the clump is and whether the
+film stock is mono) by the film stock's `grain_size`, and added strongest in the mid tones
+(`finish_grain`). `grain_size` is in pixels of the frame's *short side*, so a print w pixels wide
+spreads its grain w/3648 as far on a 6D -- half the frame's width, clumps half as wide -- and a clump
+narrower than a print pixel is a softer grain rather than none at all (#104, #186). The spread takes
+the strength of a draw a pixel off it, and the strength is up by what it takes (`grain_blur`), as
+Darkrooms' own normalising does; the noise is strongest in the mid tones, and random, so two
+developers' grain never agrees pixel for pixel. Darkrooms and the camera therefore give the same grain
+at any size, the clumps as wide as the print's width allows.
+
+The taps are a table, `GRAIN_TAP`, at clumps of 0, 1/32, 2/32 ... 1.5 print pixels: the centre and
+the one, the two and the three away, fitted so that the drawn clump's correlation at lags one to six
+is Darkrooms'. That profile is not a Gaussian, and it is one self-similar shape at every film stock
+and every print size: read at u = lag / clump it is 0.65 at u = 1, 0.24 at 2, 0.09 at 3 and 0.04 at
+4, with a tail that runs further than a Gaussian's -- which five taps a pixel apart cannot hold, their
+correlation dying at three pixels. Seven hold it to within 0.026 of the correlation, which is inside
+the 0.03 the measurement itself scatters by. Below a clump of a fifth of a pixel only the centre is
+drawn, and a pixel of the print costs one draw rather than seven: a Large frame, colour, 2736 x 1824,
+takes 550 ms on the simulator against 371 with five taps. `graintest` reads the drawn clump's
+agreement at one and at two pixels against Darkrooms' profile, for a quarter of a pixel to a pixel and
+a half, and the strength as exactly the film stock's at every one.
+
+The lab's grain strength is the film stock's `grain` times 255, drawn once as a normalised normal,
+added by a weight that is `l(255-l)/64` over the mid tones, and held at that strength whatever the
+print's size (on an HP5 Plus frame: 6.02 levels at 3648, 5.97 at 1824). A draw of the camera's is flat between -1 and 1, whose deviation
+is 1/sqrt(3) of that normal's; `GRAIN_GAIN` (sqrt 3) is that and nothing else, so a film stock's
+grain is multiplied by nothing between the two chains.
+
+Measured on 2736 x 1824 prints of one frame -- Darkrooms' "half", which is the camera's Large --
+against the camera's own development of the same CR2: Darkrooms' grain is its half print less its full
+print brought down to half, which holds nothing of the camera's, and the camera's is its grained print
+less its bare one. The two strengths agree within 5% (HP5 Plus 400: 7.6 levels against 7.3) and the
+tone weight band by band, while the clump's agreement with the pixel beside it was 0.29 against
+Darkrooms' 0.66 -- the camera's grain 2.1 times too fine, which is what the clump being read against
+the frame's width and spread by a sigma meant as a correlation had come to. Read against the short
+side and drawn by these taps it comes out at 0.61 against 0.66 (HP5 Plus 400), 0.62 against 0.66
+(CineStill 800T) and 0.60 (Tri-X 400), the remainder being the camera's JPEG at quality 92 against
+Darkrooms' 99: on a stock whose grain is as fine as Ektar 100's the quantisation roughens the clump
+past Darkrooms' on its own, which is a separate matter from the drawing.
+
+The lab's grain strength is the film stock's `grain` times 255.
+
+The weight's ends are the lab's as well, and measured: over black the lab's grain is a sixth stronger
+than `l(255-l)/64` asks, and over the highlights a twentieth to a fifteenth. `GRAIN_W` in `fos_dev.c`
+is that curve in 1/256, read off the same blocks.
+
+The same four frames are the check on the whole chain: each developed from its own CR2, by the
+simulator, at the size the camera prints (half the sensor, 1824 x 2736), against the lab's print of
+it -- the camera's grain is 1.00 of the lab's over the tones, 0.97-1.02 band by band: 1.00-1.04 (HP5
+Plus 400), 1.00-1.05 (HPS 800), 0.97-1.07 (Gold 200) and 0.92-0.96 (Ektar 100), the last of which has
+2 levels of grain, where the print's quantising is as much of the number as the film's.
 
 **10. The file.** A JPEG at quality 92, colour at half size each way (4:2:0), sRGB.
 
@@ -109,8 +159,8 @@ same frame with the darkroom at its Large size, reduces both pictures to 30 × 2
 compares the blocks: plain dE2000, the mean and the worst block.
 
 The provisional limit for "the same picture" is 1 on the mean and 3 at the worst block. For scale, the
-darkroom against itself at another size, on the sample with Kodak Gold 200: Large against Medium is 0.33
-and 1.31, Large against Small 0.59 and 2.45. So a mean under about 0.3 cannot be asked of two pictures
+darkroom against itself at another size, on the sample with Kodak Gold 200: Large against Medium is 0.34
+and 1.67, Large against Small 0.62 and 3.16. So a mean under about 0.3 cannot be asked of two pictures
 of different sizes; what is left at that level is grain, the glow's grid and the JPEG.
 
 Darkrooms is closed source. Its pictures are compared here, and only the numbers go back to #132.

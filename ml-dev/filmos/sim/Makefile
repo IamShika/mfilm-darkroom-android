@@ -52,3 +52,9 @@ out/mkcr2: tools/mkcr2.c
 out/devtest-arm: $(DEV) ../*.h out/FOSFILMS.BIN
 	mkdir -p out
 	$(CC) $(CFLAGS) -DFOS_DEV_TEST -DFOS_ARM_UNALIGNED -o $@ $(DEV) -lm
+
+# the grain the darkroom draws: the film stock's strength at every clump width, its clumps as
+# wide as its grain_size says, and no pattern of their own (#104): ./out/graintest
+out/graintest: graintest.c port_files.c ../fos_dev.c ../fos_print.c ../fos_looks.c ../fos_film.c ../fos_gfx.c ../fos_jpeg.c ../*.h
+	mkdir -p out
+	$(CC) $(CFLAGS) -DFOS_DEV_TEST -o $@ graintest.c port_files.c ../fos_dev.c ../fos_print.c ../fos_looks.c ../fos_film.c ../fos_gfx.c ../fos_jpeg.c -lm
