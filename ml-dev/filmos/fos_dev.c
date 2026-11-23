@@ -638,13 +638,23 @@ static int parse_tiff(struct fos_dev *d)
     return 1;
 }
 
+/* a Huffman table from its counts (the codes of each length) and its values
+ * (a difference's size in bits); 0 for a table no encoder writes, as a
+ * damaged file can hold */
 static int build_huff(struct huff *h, const uint8_t *counts, const uint8_t *vals, int nvals)
 {
     memset(h, 0, sizeof(*h));
-    memcpy(h->vals, vals, nvals > 256 ? 256 : nvals);
+    /* more values than vals[] holds, or a size no difference has */
+    if (nvals > 256) return 0;
+    for (int i = 0; i < nvals; i++)
+        if (vals[i] > 16) return 0;
+    memcpy(h->vals, vals, nvals);
     int code = 0, k = 0;
     for (int len = 1; len <= 16; len++)
     {
+        /* or more codes of a length than its bits can make after the shorter
+         * ones': a short one's lookups would be written past fast[] */
+        if (code + counts[len - 1] > 1 << len) return 0;
         h->valptr[len] = k;
         h->mincode[len] = code;
         for (int i = 0; i < counts[len - 1]; i++, k++, code++)
@@ -671,7 +681,7 @@ static int build_huff(struct huff *h, const uint8_t *counts, const uint8_t *vals
         }
         h->fastd[i] = (int16_t) (diff * 16 + len + s);
     }
-    return k == nvals;
+    return 1;
 }
 
 /* the lossless JPEG's header, up to the scan */
@@ -697,10 +707,15 @@ static int parse_ljpeg_in(struct fos_dev *d, uint8_t *hdr, int size)
     {
         if (hdr[p] != 0xFF) return fail(d, "broken RAW header");
         int tag = hdr[p + 1], len = hdr[p + 2] << 8 | hdr[p + 3];
-        const uint8_t *s = hdr + p + 4;
+        if (len < 2) return fail(d, "broken RAW header");
         if (p + 2 + len > n) return fail(d, "RAW header too long");
+        /* the segment (its length counts its own two bytes): a damaged
+         * file's can be too short for what it says it holds, so nothing
+         * past its end is read */
+        const uint8_t *s = hdr + p + 4, *end = hdr + p + 2 + len;
         if (tag == 0xC3)
         {
+            if (len < 10) return fail(d, "broken RAW header");     /* up to the first component's sampling, s[7] */
             d->bits = s[0];
             d->high = s[1] << 8 | s[2];
             d->wide = s[3] << 8 | s[4];
@@ -710,21 +725,29 @@ static int parse_ljpeg_in(struct fos_dev *d, uint8_t *hdr, int size)
         }
         else if (tag == 0xC4)
         {
-            for (const uint8_t *q = s; q < s + len - 2;)
+            /* tables: each its number, 16 counts and the values they count */
+            for (const uint8_t *q = s; q < end;)
             {
+                if (end - q < 17) return fail(d, "bad Huffman table");
                 int id = *q++;
                 if (id & ~3) return fail(d, "unexpected Huffman table");
                 int total = 0;
                 for (int i = 0; i < 16; i++) total += q[i];
-                if (!build_huff(&d->tables[id], q, q + 16, total)) return fail(d, "bad Huffman table");
+                if (end - q < 16 + total || !build_huff(&d->tables[id], q, q + 16, total))
+                    return fail(d, "bad Huffman table");
                 if (id + 1 > ntab) ntab = id + 1;
                 q += 16 + total;
             }
         }
-        else if (tag == 0xDD && (s[0] | s[1]))
-            return fail(d, "unsupported RAW: restart markers");
+        else if (tag == 0xDD)
+        {
+            if (len < 4) return fail(d, "broken RAW header");
+            if (s[0] | s[1]) return fail(d, "unsupported RAW: restart markers");
+        }
         else if (tag == 0xDA)
         {
+            /* the components, 2 bytes each, between their number and 3 more */
+            if (len < 6 || len < 6 + 2 * s[0]) return fail(d, "broken RAW header");
             d->psv = s[1 + s[0] * 2];
             d->bits -= s[3 + s[0] * 2] & 15;
             d->file_pos += p + 2 + len;
