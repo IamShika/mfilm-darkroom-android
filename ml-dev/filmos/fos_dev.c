@@ -2364,8 +2364,11 @@ static int grain_clump(const struct fos_look *L, int w, int ref)
  * self-similar shape: at u = lag / clump, 0.65 at u = 1, 0.24 at 2, 0.09 at 3, 0.04 at 4. Five taps
  * a pixel apart cannot hold that tail -- their correlation dies at three pixels -- so seven do, and
  * what the fit costs is at worst 0.026 of the correlation, against the 0.03 the measurement itself
- * scatters by. Below a clump of a fifth of a pixel only the centre is drawn, and a pixel of the
- * print costs one draw rather than seven. */
+ * scatters by. A clump below a fifth of a pixel wants only its centre, so a print pixel there costs
+ * one draw a row rather than seven; at the widths the film stocks ask for, finish_grain blends up to
+ * seven rows of up to seven draws, over one field on a black-and-white film stock and four on a
+ * colour one -- up to 49 draws a print pixel, or 196, less the taps the outer widths round to
+ * nothing (Velvia 50's own clump takes 100). */
 static const uint16_t GRAIN_TAP[4][49] = {
    {
     256, 256, 256, 256, 256, 256, 254, 252, 246, 242, 238, 236, 232, 228, 216, 206,
@@ -2423,34 +2426,47 @@ FOS_INLINE int grain_weight(int l)
     return w1 >= w0 ? w0 + ((w1 - w0) * f >> 5) : w0 - ((w0 - w1) * f >> 5);
 }
 
-/* row r's blend about x, 1/256: the one, the three, the five or the seven taps, by the
- * weights grain_taps gave */
-FOS_INLINE int grain_row(unsigned seed, int x, int r, int f, int q3, int q2, int q1, int q0)
+/* a row's blend about x, 1/256, from the draws already about the pixel: the one, the three, the
+ * five or the seven taps, by the weights grain_taps gave. w is the row's eight slots, the column
+ * the pixel wants at the column index and seven. */
+FOS_INLINE int grain_row(const int16_t *w, int x, int q3, int q2, int q1, int q0)
 {
-    int h = q3 * draw(seed, x, r, f);
-    if (q2) h += q2 * (draw(seed, x - 1, r, f) + draw(seed, x + 1, r, f));
-    if (q1) h += q1 * (draw(seed, x - 2, r, f) + draw(seed, x + 2, r, f));
-    if (q0) h += q0 * (draw(seed, x - 3, r, f) + draw(seed, x + 3, r, f));
+    int h = q3 * w[x & 7];
+    if (q2) h += q2 * (w[(x - 1) & 7] + w[(x + 1) & 7]);
+    if (q1) h += q1 * (w[(x - 2) & 7] + w[(x + 2) & 7]);
+    if (q0) h += q0 * (w[(x - 3) & 7] + w[(x + 3) & 7]);
     return h >> 8;
 }
 
 /* n pixels of row y from o, the print's column x0: the grain, the draws about the pixel spread
- * together, for one field, or one shared and one for each colour */
+ * together, for one field, or one shared and one for each colour.
+ *
+ * The draws about a pixel are the same seven rows of seven columns the pixel before it wanted,
+ * moved along by one: one column is new and the other six were drawn for that pixel, so a print
+ * pixel costs seven draws a field instead of forty-nine and the picture is unchanged (#188). */
 static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned seed, int grain, int mono,
                                                    int x0, int y, int q3, int q2, int q1, int q0)
 {
     const int nf = mono ? 1 : 4;
+    int16_t win[7][4][8];               /* seven rows of draws about the pixel, a column a slot */
+    for (int r = 0; r < 7; r++)
+        for (int f = 0; f < nf; f++)
+            for (int k = -3; k < 3; k++)
+                win[r][f][(x0 + k) & 7] = (int16_t) draw(seed, x0 + k, y - 3 + r, f);
     for (uint8_t *e = o + 3 * n; o < e; o += 3, x0++)
     {
         int k[4];
+        for (int r = 0; r < 7; r++)
+            for (int f = 0; f < nf; f++)
+                win[r][f][(x0 + 3) & 7] = (int16_t) draw(seed, x0 + 3, y - 3 + r, f);
         for (int f = 0; f < nf; f++)
         {
             /* this row and the two (or four) about it, each already blended along the row (the 8
              * bits off each keeps the products in 32) */
-            int v = q3 * grain_row(seed, x0, y, f, q3, q2, q1, q0);
-            if (q2) v += q2 * (grain_row(seed, x0, y - 1, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 1, f, q3, q2, q1, q0));
-            if (q1) v += q1 * (grain_row(seed, x0, y - 2, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 2, f, q3, q2, q1, q0));
-            if (q0) v += q0 * (grain_row(seed, x0, y - 3, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 3, f, q3, q2, q1, q0));
+            int v = q3 * grain_row(win[3][f], x0, q3, q2, q1, q0);
+            if (q2) v += q2 * (grain_row(win[2][f], x0, q3, q2, q1, q0) + grain_row(win[4][f], x0, q3, q2, q1, q0));
+            if (q1) v += q1 * (grain_row(win[1][f], x0, q3, q2, q1, q0) + grain_row(win[5][f], x0, q3, q2, q1, q0));
+            if (q0) v += q0 * (grain_row(win[0][f], x0, q3, q2, q1, q0) + grain_row(win[6][f], x0, q3, q2, q1, q0));
             k[f] = v >> 8;
         }
         const int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8, wgt = grain_weight(l);
