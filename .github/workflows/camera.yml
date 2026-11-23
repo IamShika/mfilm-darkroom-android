@@ -229,7 +229,7 @@ jobs:
             ${{ steps.darkrooms.outputs.blurb }}
 
             **The films' colour tables** (`M-Film-<version>-tables.zip`): every film's table as the cameras' zips carry them
-            in ML/DARKROOM, with a list of them and their checksums. The desktop darkroom reads the same files,
+            in ML/DARKROOM, with a list of them and their checksums. Darkrooms reads the same files,
             so both give the same colour. You don't need this zip for a camera.
 
             The colour tables of 53 films are adapted from film emulation tables by Pat David, and those of 9 are derived
