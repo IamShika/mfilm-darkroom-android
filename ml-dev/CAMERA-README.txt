@@ -44,7 +44,7 @@ EOS M2
   a. Copy everything off the card your M2 already starts Magic Lantern from, to keep it. Don't format
      the card: it has to keep its boot flags.
   b. Delete autoexec.bin and the ML folder from the card, then copy everything in this zip to its root.
-  c. Card back in the camera, then step 4.
+  c. Card back in the camera, camera on: the film shelf should appear.
   If your M2 has never run Magic Lantern: mlinstall may set it up as on the 1300D, but no one has tried
   it on an M2 yet, and this zip doesn't carry it. If you try, tell us what happened.
   More: https://github.com/HNGSeries/mfilm-canon-film-simulation/blob/main/TESTING.md#canon-eos-m2

@@ -222,7 +222,7 @@ which camera and firmware, and whether the card light stayed on.
 
 Format the card in the camera. To stop the camera looking for Magic Lantern at all, run
 `ML-SETUP.FIR` again from *Firmware ver.* and choose to remove the boot flag. On the 1300D, connect it to
-mlinstall and **Disable Boot Disk**. On the M2 this can't be done with M-Film's zip, which has no
+mlinstall and **Disable Boot Disk**. On the M2, the boot flag can't be removed with M-Film's zip, which has no
 `ML-SETUP.FIR`, and no one has tried mlinstall on an M2 yet.
 
 Thank you! Every camera someone tries moves it from *testing* to *working* in the
