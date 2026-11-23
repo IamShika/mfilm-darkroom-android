@@ -2438,6 +2438,130 @@ FOS_INLINE int grain_row(const int16_t *w, int x, int q3, int q2, int q1, int q0
     return h >> 8;
 }
 
+
+/* --- the texture plate, for the assessment of #188's cost.  The grain is spread once into a
+ * texture and then sampled, so a print pixel costs a lookup instead of the spread.  The plate is
+ * a torus of draws -- it wraps at its own edges -- so it meets itself without a seam.  This frame
+ * reads it from its own origin, taken from the frame's seed, so that two frames do not show the
+ * grain in the same places (#188).
+ *
+ * A plate is periodic and so carries a period.  Two of them stacked are periodic only at the
+ * least common multiple of their sizes, so two plates a few hundred pixels across whose sizes
+ * share no factor give an effective period longer than any print, for a couple of megabytes.
+ * FOS_PLATE and FOS_PLATE2 are the simulator's knobs; the camera would carry the plate for the
+ * stock, built once. --- */
+#define NPLATE 2
+#define FOS_PLATE2 257       /* shares no factor with 256: the pair repeats at 65,792 */
+static int32_t *plate[NPLATE];
+static int plate_w[NPLATE], plate_h[NPLATE];
+static unsigned plate_seed;
+static int plate_nf, plate_q3, plate_q2, plate_q1, plate_q0;
+static int plate_ox, plate_oy;
+static int plate_lg = -1, plate2_sz = -1;
+
+static void plate_sizes(void)
+{
+    if (plate_lg >= 0) return;
+#ifdef FOS_DEV_TEST
+    const char *a = getenv("FOS_PLATE"), *b = getenv("FOS_PLATE2");   /* the simulator's knobs */
+    plate_lg = a ? atoi(a) : 0;
+    if (plate_lg < 6) plate_lg = 0;                     /* 64 or more, or the drawn grain */
+    plate2_sz = b ? atoi(b) : 0;
+    if (plate2_sz < 64) plate2_sz = 0;
+#else
+    plate_lg = 8;                                       /* 256 x 256, and 257 beside it */
+    plate2_sz = FOS_PLATE2;
+#endif
+}
+
+static int plate_on(void) { plate_sizes(); return plate_lg; }
+
+/* a wrap that holds for a size that is not a power of two, and the mask when it is */
+static int pwrap(int i, int w) { return (w & (w - 1)) ? ((i % w) + w) % w : (i & (w - 1)); }
+
+/* one row of the blend at the frame's own (x, y), unwrapped: the plate is built over the frame's
+ * coordinates with a margin of three, so the print's pixel x reads the plate's x + 3 and gets the
+ * value the drawn grain would have there -- including at the frame's own edge, where the drawn
+ * grain reads off it.  Building it this way costs no seam and no buffer of its own. */
+static int plate_row_at(unsigned seed, int x, int y, int f, int q3, int q2, int q1, int q0)
+{
+    int h = q3 * (int16_t) draw(seed, x, y, f);
+    if (q2) h += q2 * ((int16_t) draw(seed, x - 1, y, f) + (int16_t) draw(seed, x + 1, y, f));
+    if (q1) h += q1 * ((int16_t) draw(seed, x - 2, y, f) + (int16_t) draw(seed, x + 2, y, f));
+    if (q0) h += q0 * ((int16_t) draw(seed, x - 3, y, f) + (int16_t) draw(seed, x + 3, y, f));
+    return h >> 8;
+}
+
+static int plate_make(int which, unsigned seed, int nf, int w, int h, int q3, int q2, int q1, int q0)
+{
+    fos_port_free(plate[which]);
+    plate[which] = (int32_t *) fos_port_alloc(nf * w * h * (int) sizeof(int32_t));
+    if (!plate[which]) return 0;
+    int two = plate_lg && plate2_sz;
+    for (int f = 0; f < nf; f++)
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < w; i++)
+            {
+                int x = i - 3, y = j - 3;
+                int v = q3 * plate_row_at(seed, x, y, f, q3, q2, q1, q0);
+                if (q2) v += q2 * (plate_row_at(seed, x, y - 1, f, q3, q2, q1, q0)
+                                 + plate_row_at(seed, x, y + 1, f, q3, q2, q1, q0));
+                if (q1) v += q1 * (plate_row_at(seed, x, y - 2, f, q3, q2, q1, q0)
+                                 + plate_row_at(seed, x, y + 2, f, q3, q2, q1, q0));
+                if (q0) v += q0 * (plate_row_at(seed, x, y - 3, f, q3, q2, q1, q0)
+                                 + plate_row_at(seed, x, y + 3, f, q3, q2, q1, q0));
+                v >>= 8;
+                if (two) v = v * 181 >> 8;
+                plate[which][((size_t) f * h + j) * w + i] = v;
+            }
+    plate_w[which] = w; plate_h[which] = h;
+#ifdef FOS_DEV_TEST
+    if (getenv("FOS_PLATE_DEBUG"))
+        fprintf(stderr, "plate: %d x %d x %d fields built, %.1f MB\n", w, h, nf,
+                (double) (size_t) nf * w * h * sizeof(int32_t) / 1048576.0);
+#endif
+    return 1;
+}
+
+static void plate_build(unsigned seed, int nf, int q3, int q2, int q1, int q0)
+{
+    plate_sizes();
+    plate_seed = seed; plate_nf = nf; plate_q3 = q3; plate_q2 = q2; plate_q1 = q1; plate_q0 = q0;
+#ifdef FOS_DEV_TEST
+    const char *ew = getenv("FOS_PLATE_W"), *eh = getenv("FOS_PLATE_H");
+    int pw = ew ? atoi(ew) : (1 << plate_lg), ph = eh ? atoi(eh) : pw;
+#else
+    int pw = 1 << plate_lg, ph = pw;
+#endif
+    if (!plate_make(0, seed, nf, pw, ph, q3, q2, q1, q0)) return;
+    if (plate2_sz && !plate_make(1, seed ^ 0x9e3779b9u, nf, plate2_sz, plate2_sz, q3, q2, q1, q0))
+    { fos_port_free(plate[0]); plate[0] = NULL; return; }
+#ifdef FOS_DEV_TEST
+    const char *o = getenv("FOS_PLATE_ORIGIN");         /* the small print's own corner is (0,0) */
+    if (o)
+    {
+        plate_ox = atoi(o);
+        const char *c = strchr(o, ',');
+        plate_oy = c ? atoi(c + 1) : 0;
+    }
+    else
+#endif
+    {
+        plate_ox = (int) ((seed >> 7) % (unsigned) plate_w[0]);
+        plate_oy = (int) ((seed >> 19) % (unsigned) plate_h[0]);
+    }
+}
+
+static int plate_at(int f, int x, int y)
+{
+    int v = plate[0][((size_t) f * plate_h[0] + ((y + plate_oy) & (plate_h[0] - 1)))
+                     * plate_w[0] + ((x + plate_ox) & (plate_w[0] - 1))];
+    if (plate[1])
+        v += plate[1][((size_t) f * plate_h[1] + (unsigned) (y + plate_oy) % FOS_PLATE2)
+                       * plate_w[1] + (unsigned) (x + plate_ox) % FOS_PLATE2];
+    return v;
+}
+
 /* n pixels of row y from o, the print's column x0: the grain, the draws about the pixel spread
  * together, for one field, or one shared and one for each colour.
  *
@@ -2448,7 +2572,15 @@ static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned s
                                                    int x0, int y, int q3, int q2, int q1, int q0)
 {
     const int nf = mono ? 1 : 4;
+    int pl = plate_on();
+    if (pl && (!plate[0] || plate_nf != nf || plate_seed != seed
+               || plate_q3 != q3 || plate_q2 != q2 || plate_q1 != q1 || plate_q0 != q0))
+    {
+        plate_build(seed, nf, q3, q2, q1, q0);
+        if (!plate[0]) pl = 0;                          /* no room: draw the grain instead */
+    }
     int16_t win[7][4][8];               /* seven rows of draws about the pixel, a column a slot */
+    if (!pl)
     for (int r = 0; r < 7; r++)
         for (int f = 0; f < nf; f++)
             for (int k = -3; k < 3; k++)
@@ -2456,6 +2588,12 @@ static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned s
     for (uint8_t *e = o + 3 * n; o < e; o += 3, x0++)
     {
         int k[4];
+        if (pl)
+        {
+            for (int f = 0; f < nf; f++) k[f] = plate_at(f, x0, y);
+        }
+        else
+        {
         for (int r = 0; r < 7; r++)
             for (int f = 0; f < nf; f++)
                 win[r][f][(x0 + 3) & 7] = (int16_t) draw(seed, x0 + 3, y - 3 + r, f);
@@ -2468,6 +2606,7 @@ static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned s
             if (q1) v += q1 * (grain_row(win[1][f], x0, q3, q2, q1, q0) + grain_row(win[5][f], x0, q3, q2, q1, q0));
             if (q0) v += q0 * (grain_row(win[0][f], x0, q3, q2, q1, q0) + grain_row(win[6][f], x0, q3, q2, q1, q0));
             k[f] = v >> 8;
+        }
         }
         const int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8, wgt = grain_weight(l);
         for (int ch = 0; ch < 3; ch++)
