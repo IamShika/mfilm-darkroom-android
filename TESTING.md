@@ -103,7 +103,9 @@ Magic Lantern:
 3. Card in, camera on: the film shelf should appear. Then step 4 above.
 
 If your M2 has never run Magic Lantern, mlinstall may set it up as on the 1300D (steps 2 and 3 there),
-but no one has tried it on an M2 yet. If you try, tell us what happened. Canon's firmware must be 1.0.3.
+but no one has tried it on an M2 yet. If you try, tell us what happened.
+
+Canon's newest firmware for the M2 is 1.0.4, and M-Film needs 1.0.3: stay on 1.0.3, don't update to 1.0.4.
 
 ## 3. What to try, and what to tell us
 
