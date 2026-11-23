@@ -3,8 +3,8 @@
 # what it can, and says why it can't the rest; Delete roll takes exactly
 # what it says, and what it couldn't is still there to delete again; a card
 # that can't take long folder names keeps no empty ones (#65); a roll
-# developed again keeps its folder; a RAW whose header is broken fails and
-# says why. Fails if a line is missing or a file is wrong.
+# developed again keeps its folder; a broken RAW fails and says why, or
+# develops as far as it goes. Fails if a line is missing or a file is wrong.
 #   make && ./cardtest.sh
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -152,24 +152,38 @@ n=$(find out/cardx/DCIM -name 'IMG_060[12].CR2' | wc -l | tr -d ' ')
 grep -qE "roll 005 frame 2 developed" out/cardtest-gone.log \
     && echo "ok    A film that left the shelf: the roll beside it develops" || { echo "FAIL  A film that left the shelf: roll 005 did not develop"; fail=1; }
 
-# A RAW whose header is broken, as a damaged card or file can have: the frame
-# fails and says why. A Huffman table with more codes than it has room for was
-# written past the darkroom's lookup, and a segment cut short was read past its
-# end (devtest built with -fsanitize=address,undefined shows it).
-# tools/badcr2.py breaks one thing in a good frame for each; the two it only
-# takes apart and puts back, or fills, must still develop, every sample right
+# A broken RAW, as a damaged card or file can have: the frame fails and says
+# why, or develops as far as the file goes, and it never reads or writes
+# outside what it has, nor goes round forever. (A Huffman table with more codes
+# than it has room for was written past the darkroom's lookup, a segment cut
+# short was read past its end, and slices of no width went round forever.)
+# tools/badcr2.py breaks a good frame in each way it knows; those it only takes
+# apart and puts back, or changes in a way the darkroom must take, must still
+# develop, every sample right, and those cut short, decoded to nonsense or read
+# past their end develop. A frame still going after a minute fails (where
+# there is a timeout command: a Mac has none). Reading or writing outside, or
+# an int running over, shows only in a devtest built by hand with
+# -fsanitize=address,undefined, run on these files: CI builds it plain.
 make -s out/devtest out/mkcr2
 b=out/badraw
 rm -rf "$b" && mkdir -p "$b"
-./out/mkcr2 "$b/good.CR2" --small --raw "$b/good.u16" 2>/dev/null
+# with the camera's white balance, so its maker note has the colour data as well
+./out/mkcr2 "$b/good.CR2" --small --wb 2,1.5 --raw "$b/good.u16" 2>/dev/null
 python3 tools/badcr2.py "$b/good.CR2" "$b"
+develop() {
+    if command -v timeout >/dev/null; then FOS_MIX=1 timeout 60 ./out/devtest "$@"; else FOS_MIX=1 ./out/devtest "$@"; fi
+}
 while read -r name want; do
-    if [ "$want" = ok ]; then
-        FOS_MIX=1 ./out/devtest -r "$b/good.u16" "$b/$name.CR2" "$b/$name.fop" > "$b/$name.log" 2>&1 \
-            && grep -q "decoder: [0-9]* samples, 0 wrong" "$b/$name.log" && echo "ok    A broken RAW: $name develops" \
-            || { echo "FAIL  A broken RAW: $name: $(tail -1 "$b/$name.log")"; fail=1; }
-    elif FOS_MIX=1 ./out/devtest "$b/$name.CR2" "$b/$name.fop" > "$b/$name.log" 2>&1; then
-        echo "FAIL  A broken RAW: $name developed"; fail=1
+    rc=0
+    if [ "$want" = ok ]; then develop -r "$b/good.u16" "$b/$name.CR2" "$b/$name.fop" > "$b/$name.log" 2>&1 || rc=$?
+    else develop "$b/$name.CR2" "$b/$name.fop" > "$b/$name.log" 2>&1 || rc=$?; fi
+    { echo "-- broken RAW $name ($want)"; cat "$b/$name.log"; } >> "$log"
+    if [ $rc = 124 ]; then echo "FAIL  A broken RAW: $name: still going after a minute"; fail=1
+    elif [ "$want" = ok ] || [ "$want" = develops ]; then
+        if [ $rc = 0 ] && { [ "$want" = develops ] || grep -q "decoder: [0-9]* samples, 0 wrong" "$b/$name.log"; }; then
+            echo "ok    A broken RAW: $name develops"
+        else echo "FAIL  A broken RAW: $name: $(tail -1 "$b/$name.log")"; fail=1; fi
+    elif [ $rc = 0 ]; then echo "FAIL  A broken RAW: $name developed"; fail=1
     elif grep -qxF "$b/$name.CR2: $want" "$b/$name.log"; then echo "ok    A broken RAW: $name: $want"
     else echo "FAIL  A broken RAW: $name: $(tail -1 "$b/$name.log")"; fail=1; fi
 done < "$b/LIST.txt"
