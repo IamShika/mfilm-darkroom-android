@@ -71,7 +71,9 @@ start it. Bigger takes longer, and can be zoomed into in the camera. If the scre
 after the camera lost power while developing with the screen dimmed (INFO), switch it on once
 more: M-Film puts the brightness back when it starts.
 
-Remove: format the card in the camera, or delete autoexec.bin and ML/.
+Remove: format the card in the camera, or delete autoexec.bin and ML/. On an EOS M2, formatting
+takes the card's boot flags with it, and this zip can't put them back: to keep them, delete
+autoexec.bin and ML/ instead.
 Logs for a bug report: ML/FILMROLL.LOG on the card.
 
 Free software (GPL-2.0, LICENSE.txt; the source is at https://github.com/HNGSeries/mfilm-canon-film-simulation).
