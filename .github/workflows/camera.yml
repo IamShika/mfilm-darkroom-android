@@ -213,7 +213,8 @@ jobs:
           body: |
             **On the camera** (`M-Film-<version>-camera-<camera>.zip`): the Film OS with Magic Lantern. Unzip it onto the card
             and run *Firmware ver.* → update once (see M-FILM-README.txt in the zip; the 1300D has no `ML-SETUP.FIR` and is
-            set up from a computer instead, with mlinstall, which its zip carries: see TESTING.md). How far testers have got on
+            set up from a computer instead, with mlinstall, which its zip carries; the EOS M2's zip has no `ML-SETUP.FIR` either,
+            and for now it's for M2s that already start Magic Lantern: for both, see TESTING.md). How far testers have got on
             each camera, and what's still wrong, is in the README's camera table: see TESTING.md before you put it
             on a camera nobody has tried yet. Every zip has the in-camera darkroom. The film OS is a module on
             every camera (ML/modules/filmos.mo, loaded after boot): one zip a camera.
