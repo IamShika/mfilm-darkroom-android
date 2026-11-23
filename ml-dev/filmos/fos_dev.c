@@ -2517,9 +2517,11 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
     finish_pos(d->lin + 3 * (y * W + px0), d->pos, pw, 4096 - d->vig_y[y], d->vig_x,
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal, (int) (L->hal_thr * 4096));
     finish_lut(d->pos, o + 3 * px0, pw);
-    int c = grain_clump(L, W, grain_ref(d)), q3, q2, q1, q0;
+    int c = grain_clump(L, pw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    /* the clump is the print's own width's, as the enlargement's is: the screen print is only
+     * FOS_PRINT_W wide on a landscape frame, and a portrait or cropped one is narrower still */
     if (grain) finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono, px0, y, q3, q2, q1, q0);
 }
 
