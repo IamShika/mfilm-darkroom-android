@@ -20,8 +20,11 @@ permissions:
   pages: write
   id-token: write
 
+# A group for each ref: a pull request's runs replace each other, but never the run on main that
+# deploys (#202). Every run that can deploy has main's ref, camera.yml's workflow_dispatch too, so
+# two deploys never run at once.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
