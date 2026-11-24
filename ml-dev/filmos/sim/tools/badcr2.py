@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 WINDOW = 2048   # the bytes of the header the darkroom reads at once (fos_dev.c, parse_ljpeg)
+RAW_MAX = 16384  # the widest and tallest RAW frame it takes (fos_dev.c, setup_maps)
 DHT, SOF3, DRI, SOS, COM = 0xC4, 0xC3, 0xDD, 0xDA, 0xFE
 
 
@@ -341,7 +342,7 @@ def most_samples(f, more=0):
     if 4096 % clrs:
         sys.exit(f"{clrs} components: 4096 samples aren't a whole number of columns of each")
     wide = 4096 // clrs + more
-    struct.pack_into(">HH", sof, 1, 16384, wide)
+    struct.pack_into(">HH", sof, 1, RAW_MAX, wide)
     f = with_raw(f, off, at, join(segs) + data)
     struct.pack_into("<3H", f, slices_at(f), 0, 0, wide * clrs)
     return f
@@ -357,6 +358,35 @@ def samples_too_many(f):
     """the same and a column of each component more: more samples than the
     darkroom takes, which would keep the camera decoding for minutes"""
     return most_samples(f, 1)
+
+
+def widest(f, more=0):
+    """the frame 16384 samples wide, with a sample more for each of more:
+    in two components, a frame twice that wide and half as high, which the
+    darkroom folds back (as some cameras write it), so a side can be an odd
+    number of samples; in no slices but the last (0, 0, its width); the
+    RAW's data as it was"""
+    off, _, at = raw_strip(f)
+    segs, data = split(f[off:])
+    sof = body_of(segs, SOF3)
+    if sof[5] != 2:
+        sys.exit(f"{sof[5]} components: wants mkcr2's 2, to fold the frame")
+    high = struct.unpack_from(">H", sof, 1)[0]
+    wide = RAW_MAX + more
+    struct.pack_into(">HH", sof, 1, high // 2, wide)
+    f = with_raw(f, off, at, join(segs) + data)
+    struct.pack_into("<3H", f, slices_at(f), 0, 0, wide)
+    return f
+
+
+def width_16384(f):
+    """the widest frame taken. It develops, most of it past the file's end"""
+    return widest(f)
+
+
+def width_16385(f):
+    """a sample wider than the darkroom takes"""
+    return widest(f, 1)
 
 
 def raw_ifd_huge(f):
@@ -486,6 +516,8 @@ FILE_WAYS = [
     ("slices-last-0", slices_last_0, "ok"),
     ("samples-most", samples_most, "develops"),
     ("samples-too-many", samples_too_many, SIZE),
+    ("width-16384", width_16384, "develops"),
+    ("width-16385", width_16385, SIZE),
     ("raw-ifd-huge", raw_ifd_huge, "no RAW in this file"),
     ("raw-offset-huge", raw_offset_huge, "can't read the RAW"),
     ("raw-length-huge", raw_length_huge, "ok"),

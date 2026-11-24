@@ -70,6 +70,26 @@ jobs:
       - name: Every film stock that has a reference, against it
         run: python ml-dev/films/measure.py look
 
+  # the problem rolls, the broken RAWs and the sample RAW again, with the simulator and devtest built
+  # with AddressSanitizer and UndefinedBehaviorSanitizer (cardtest.sh --sanitize): a read or write
+  # outside what the darkroom has, an int running over or memory never given back fails it, as a
+  # wrong line does
+  darkroom-sanitizers:
+    runs-on: ubuntu-24.04
+    name: darkroom (sanitizers)
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Python for the film tables
+        run: python -m pip install -q numpy
+      - name: Build the simulator and devtest with ASan and UBSan
+        run: make -C ml-dev/filmos/sim out/sim-san out/devtest-san out/mkcr2 out/tables/TABLES.txt
+      - name: Develop the problem rolls and the broken RAWs
+        run: bash ml-dev/filmos/sim/cardtest.sh --sanitize
+
   camera:
     strategy:
       fail-fast: false

@@ -53,6 +53,19 @@ out/devtest-arm: $(DEV) ../*.h out/FOSFILMS.BIN
 	mkdir -p out
 	$(CC) $(CFLAGS) -DFOS_DEV_TEST -DFOS_ARM_UNALIGNED -o $@ $(DEV) -lm
 
+# the simulator and devtest with AddressSanitizer and UndefinedBehaviorSanitizer (and gcc's
+# bounds-strict, where the compiler has it): each stops at the first read or write outside what it
+# has, or an int running over, and says where; memory it never gives back is said as it ends
+# (./cardtest.sh --sanitize)
+SAN = -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer \
+      $(shell $(CC) -fsanitize=bounds-strict -x c -c /dev/null -o /dev/null 2>/dev/null && echo -fsanitize=bounds-strict)
+out/sim-san: $(SRC) ../*.h out/FOSFONT.BIN out/FOSFILMS.BIN
+	mkdir -p out
+	$(CC) $(CFLAGS) $(SAN) -o $@ $(SRC) -lm
+out/devtest-san: $(DEV) ../*.h out/FOSFILMS.BIN
+	mkdir -p out
+	$(CC) $(CFLAGS) $(SAN) -DFOS_DEV_TEST -o $@ $(DEV) -lm
+
 # the grain the darkroom draws: the film stock's strength at every clump width, its clumps as
 # wide as its grain_size says, and no pattern of their own (#104): ./out/graintest
 out/graintest: graintest.c port_files.c ../fos_dev.c ../fos_print.c ../fos_looks.c ../fos_film.c ../fos_gfx.c ../fos_jpeg.c ../*.h

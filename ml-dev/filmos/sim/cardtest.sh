@@ -4,14 +4,33 @@
 # what it says, and what it couldn't is still there to delete again; a card
 # that can't take long folder names keeps no empty ones (#65); a roll
 # developed again keeps its folder; a broken RAW fails and says why, or
-# develops as far as it goes. Fails if a line is missing or a file is wrong.
+# develops as far as it goes, and the sample RAW develops. Fails if a line
+# is missing or a file is wrong.
 #   make && ./cardtest.sh
+#   ./cardtest.sh --sanitize   the same with the simulator and devtest built with ASan and UBSan
+#                              (out/sim-san, out/devtest-san): anything they find fails it
 set -euo pipefail
 cd "$(dirname "$0")"
+san=            # the builds it runs are out/sim$san and out/devtest$san
+case "${1:-}" in
+    "") ;;
+    --sanitize)
+        san=-san
+        make -s out/sim-san
+        # what they find stops the program (the Makefile's -fno-sanitize-recover), a leak as it
+        # ends, and the stack goes in the log
+        export UBSAN_OPTIONS=print_stacktrace=1 ;;
+    *) echo "usage: $0 [--sanitize]" >&2; exit 2 ;;
+esac
+# the first line of a report of theirs, and the summary at its end
+san_report='runtime error: |(ERROR|SUMMARY): [A-Za-z]+Sanitizer'
 CARD=out/cardp ./mkcard.sh --problems >/dev/null
-rm -rf out/frames/problems && mkdir -p out/frames/problems
+rm -rf out/frames/problems out/cardtest-gap.log out/cardtest-gone.log && mkdir -p out/frames/problems
 log=out/cardtest.log
-FOS_CARD=out/cardp/ ./out/sim scenes/darkroom_problems.txt out/frames/problems > "$log" 2>&1
+# what they find in the simulator stops it, and the test with it: on the way out of a failed test,
+# the first report in each log, and where
+trap 'st=$?; [ $st = 0 ] || grep -m1 -hE -A15 "$san_report" "$log" out/cardtest-gap.log out/cardtest-gone.log 2>/dev/null || :; exit $st' EXIT
+FOS_CARD=out/cardp/ "./out/sim$san" scenes/darkroom_problems.txt out/frames/problems > "$log" 2>&1
 
 fail=0
 expect() {
@@ -43,7 +62,7 @@ dcard=out/cardp
 deletes() {     # deletes <what> <scene> <path that goes>...   (on $dcard)
     local what=$1 scene=$2; shift 2
     listing $dcard > out/del-before.txt
-    FOS_CARD=$dcard/ ./out/sim "scenes/$scene.txt" - >> "$log" 2>&1
+    FOS_CARD=$dcard/ "./out/sim$san" "scenes/$scene.txt" - >> "$log" 2>&1
     listing $dcard > out/del-after.txt
     printf '%s\n' "$@" | sed '/^$/d' | sort > out/del-want.txt
     comm -23 out/del-before.txt out/del-after.txt > out/del-gone.txt
@@ -100,7 +119,7 @@ n=$(grep -c "lab: can't remove" "$log" || true)
 # are developed again: they have frames that can't be)
 long_dirs() { find "$1/DCIM" -mindepth 1 -maxdepth 1 -type d -name '* *' | wc -l | tr -d ' '; }    # (BSD wc pads)
 CARD=out/cardl ./mkcard.sh --problems >/dev/null
-for i in 1 2; do FOS_CARD=out/cardl/ FOS_LONG_DIRS_EMPTY=1 ./out/sim scenes/darkroom_problems.txt - >> "$log" 2>&1; done
+for i in 1 2; do FOS_CARD=out/cardl/ FOS_LONG_DIRS_EMPTY=1 "./out/sim$san" scenes/darkroom_problems.txt - >> "$log" 2>&1; done
 expect "Long names fail: short folder"      "darkroom: JPEGs in out/cardl/DCIM/OCT1003"
 n=$(find out/cardl/DCIM/OCT1003 -name '*.JPG' | wc -l | tr -d ' ')
 [ "$n" = 4 ] && echo "ok    Long names fail: 4 JPEGs in OCT1003" || { echo "FAIL  Long names fail: $n JPEGs in OCT1003"; fail=1; }
@@ -108,7 +127,7 @@ n=$(long_dirs out/cardl)
 [ "$n" = 0 ] && echo "ok    Long names fail: no empty long folders" || { echo "FAIL  Long names fail: $n long folders left"; fail=1; }
 # and a camera that can't remove a folder either: one left for each roll, not one more each time
 CARD=out/cardl ./mkcard.sh --problems >/dev/null
-for i in 1 2; do FOS_CARD=out/cardl/ FOS_LONG_DIRS_EMPTY=1 FOS_NO_RMDIR=1 ./out/sim scenes/darkroom_problems.txt - >> "$log" 2>&1; done
+for i in 1 2; do FOS_CARD=out/cardl/ FOS_LONG_DIRS_EMPTY=1 FOS_NO_RMDIR=1 "./out/sim$san" scenes/darkroom_problems.txt - >> "$log" 2>&1; done
 n=$(long_dirs out/cardl)
 [ "$n" = 3 ] && echo "ok    Long names fail, no folder removal: 3 left" || { echo "FAIL  Long names fail, no folder removal: $n left, not 3"; fail=1; }
 # there, Delete roll still takes every file of the whole roll (008) and its
@@ -126,9 +145,9 @@ expect "Delete roll, no folder removal: the folders counted" "lab: roll 008: del
 # has: here "Oct1002 Ektar100 2", the first name free again (another roll
 # of that day deleted since). No second folder, no frame developed again.
 CARD=out/cardg ./mkcard.sh --problems >/dev/null
-FOS_CARD=out/cardg/ ./out/sim scenes/darkroom_problems.txt - >> "$log" 2>&1
+FOS_CARD=out/cardg/ "./out/sim$san" scenes/darkroom_problems.txt - >> "$log" 2>&1
 mv "out/cardg/DCIM/Oct1002 Ektar100" "out/cardg/DCIM/Oct1002 Ektar100 2"
-FOS_CARD=out/cardg/ ./out/sim scenes/darkroom_problems.txt - > out/cardtest-gap.log 2>&1
+FOS_CARD=out/cardg/ "./out/sim$san" scenes/darkroom_problems.txt - > out/cardtest-gap.log 2>&1
 cat out/cardtest-gap.log >> "$log"
 grep -qF "darkroom: JPEGs in out/cardg/DCIM/Oct1002 Ektar100 2" out/cardtest-gap.log && [ ! -e "out/cardg/DCIM/Oct1002 Ektar100" ] \
     && echo "ok    A gap in the day's names: its own folder" || { echo "FAIL  A gap in the day's names: not its own folder"; fail=1; }
@@ -140,7 +159,7 @@ grep -qE "roll 007 frame [0-9]+ developed" out/cardtest-gap.log \
 # film; its RAWs stay; the roll beside it develops
 CARD=out/cardx ./mkcard.sh --gone >/dev/null
 rm -rf out/frames/gone
-FOS_CARD=out/cardx/ ./out/sim scenes/darkroom_problems.txt out/frames/gone > out/cardtest-gone.log 2>&1
+FOS_CARD=out/cardx/ "./out/sim$san" scenes/darkroom_problems.txt out/frames/gone > out/cardtest-gone.log 2>&1
 cat out/cardtest-gone.log >> "$log"
 grep -qF "roll 004 frame 1: its film (kodak2383) is not on the shelf any more" out/cardtest-gone.log \
     && echo "ok    A film that left the shelf: the frame says so" || { echo "FAIL  A film that left the shelf: nothing said"; fail=1; }
@@ -162,23 +181,25 @@ grep -qE "roll 005 frame 2 developed" out/cardtest-gone.log \
 # develop, every sample right, and those cut short, decoded to nonsense or read
 # past their end develop. A frame still going after a minute fails (where
 # there is a timeout command: a Mac has none). Reading or writing outside, or
-# an int running over, shows only in a devtest built by hand with
-# -fsanitize=address,undefined, run on these files: CI builds it plain.
-make -s out/devtest out/mkcr2
+# an int running over, shows only with --sanitize; reading past the data but
+# inside its buffer shows in neither, and can end differently in each (ASan
+# fills new memory with 0xbe, where it is often 0 without it): CI runs both.
+make -s "out/devtest$san" out/mkcr2
 b=out/badraw
 rm -rf "$b" && mkdir -p "$b"
 # with the camera's white balance, so its maker note has the colour data as well
 ./out/mkcr2 "$b/good.CR2" --small --wb 2,1.5 --raw "$b/good.u16" 2>/dev/null
 python3 tools/badcr2.py "$b/good.CR2" "$b"
 develop() {
-    if command -v timeout >/dev/null; then FOS_MIX=1 timeout 60 ./out/devtest "$@"; else FOS_MIX=1 ./out/devtest "$@"; fi
+    if command -v timeout >/dev/null; then FOS_MIX=1 timeout 60 "./out/devtest$san" "$@"; else FOS_MIX=1 "./out/devtest$san" "$@"; fi
 }
 while read -r name want; do
     rc=0
     if [ "$want" = ok ]; then develop -r "$b/good.u16" "$b/$name.CR2" "$b/$name.fop" > "$b/$name.log" 2>&1 || rc=$?
     else develop "$b/$name.CR2" "$b/$name.fop" > "$b/$name.log" 2>&1 || rc=$?; fi
     { echo "-- broken RAW $name ($want)"; cat "$b/$name.log"; } >> "$log"
-    if [ $rc = 124 ]; then echo "FAIL  A broken RAW: $name: still going after a minute"; fail=1
+    if found=$(grep -m1 -E "$san_report" "$b/$name.log"); then echo "FAIL  A broken RAW: $name: $found"; fail=1
+    elif [ $rc = 124 ]; then echo "FAIL  A broken RAW: $name: still going after a minute"; fail=1
     elif [ "$want" = ok ] || [ "$want" = develops ]; then
         if [ $rc = 0 ] && { [ "$want" = develops ] || grep -q "decoder: [0-9]* samples, 0 wrong" "$b/$name.log"; }; then
             echo "ok    A broken RAW: $name develops"
@@ -187,5 +208,12 @@ while read -r name want; do
     elif grep -qxF "$b/$name.CR2: $want" "$b/$name.log"; then echo "ok    A broken RAW: $name: $want"
     else echo "FAIL  A broken RAW: $name: $(tail -1 "$b/$name.log")"; fail=1; fi
 done < "$b/LIST.txt"
+# and a whole one from a camera: the EOS M's sample
+rc=0; develop ../../films/sample/SAMPLE.CR2 "$b/sample.fop" > "$b/sample.log" 2>&1 || rc=$?
+{ echo "-- the sample RAW"; cat "$b/sample.log"; } >> "$log"
+if found=$(grep -m1 -E "$san_report" "$b/sample.log"); then echo "FAIL  The sample RAW: $found"; fail=1
+elif [ $rc = 124 ]; then echo "FAIL  The sample RAW: still going after a minute"; fail=1
+elif [ $rc = 0 ]; then echo "ok    The sample RAW develops"
+else echo "FAIL  The sample RAW: $(tail -1 "$b/sample.log")"; fail=1; fi
 
-[ $fail = 0 ] && echo "cardtest: all passed" || { echo "cardtest: failed (log: sim/$log)"; exit 1; }
+[ $fail = 0 ] && echo "cardtest: all passed${san:+, with ASan and UBSan}" || { echo "cardtest: failed (log: sim/$log)"; exit 1; }
