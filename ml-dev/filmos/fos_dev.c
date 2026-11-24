@@ -2687,6 +2687,22 @@ int fos_dev_test_grain_clump(const struct fos_look *f, int w, int full) { return
 
 /* the grain alone, for graintest: h rows of w pixels at the film stock's strength, on the flat
  * grey given (no picture about it), in clumps of sigma c (1/256 of a pixel) */
+/* forget the plates and the sizes they were read at, so a test can set the knobs again and have
+ * the next row build another pair: what the camera never does, and what the plate's checks need
+ * to cover more than one size (#188) */
+void fos_dev_test_plate_reset(void)
+{
+    for (int i = 0; i < NPLATE; i++)
+    {
+        fos_port_free(plate[i]);
+        plate[i] = NULL;
+        plate_w[i] = plate_h[i] = 0;
+    }
+    plate_lg = -1; plate2_sz = -1; plate_tried = 0;
+    plate_seed = 0; plate_nf = 0;
+    plate_q3 = plate_q2 = plate_q1 = plate_q0 = 0;
+}
+
 void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, int level)
 {
     int q3, q2, q1, q0;

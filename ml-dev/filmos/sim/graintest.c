@@ -116,14 +116,90 @@ static double row_agree(const uint8_t *p, int w, int h, int y, int d, double m, 
 #define WF 1000
 static uint8_t platef[WF * W * 3];
 
+/* The plate's checks, for one configuration: with no FOS_PLATE the grain is drawn, and the
+ * strength is still the absolute the stock asks for.  With a plate, its edges have to meet
+ * themselves on both axes and a pair must not repeat a column inside the print (#188, review). */
+static void check_plate(const char *lg, const char *p2)
+{
+    char b[200];
+    int p0 = lg ? 1 << atoi(lg) : 0;
+    int p1 = lg && p2 && atoi(p2) >= 64 ? atoi(p2) : 0;
+    if (lg)
+    {
+        setenv("FOS_PLATE", lg, 1);
+        setenv("FOS_PLATE2", p2 ? p2 : "0", 1);
+        setenv("FOS_PLATE_ORIGIN", "0", 1);   /* so the test knows where the plate's edges fall */
+    }
+    else
+    {
+        unsetenv("FOS_PLATE");
+        unsetenv("FOS_PLATE2");
+    }
+    fos_dev_test_plate_reset();               /* nothing left of the configuration before */
+
+    /* the strength is an absolute number of levels at a one pixel clump, where the grain is a draw
+     * a pixel: a plate has to come to the same number, not to a fraction or a multiple of it.  The
+     * grain itself draws 5.33 levels in colour at 120 (#188, review). */
+    {
+        double s, a1, a2;
+        measure(0, 256, 120, &s, &a1, &a2);
+        snprintf(b, sizeof(b), "%s clump 1 px: %.2f levels against the grain's own 5.33",
+                 lg ? "plated," : "drawn,", s);
+        ok("the strength is the stock's, not a fraction of it", fabs(s - 5.33) < 0.25, b);
+    }
+    if (!lg) return;
+
+    {
+        double m, v, e, in, r0, r1;
+        int ne, ni;
+
+        fos_dev_test_grain(platef, W, WF, 256, 2400, 0, 120);
+        mean_var(platef, W, WF, &m, &v);
+
+        /* every place the plate's index runs off one of its edges in this field, against the same
+         * field's own inside: the seam this is for takes about 0.6 off the agreement, and the
+         * estimate itself wanders by a tenth or two, so the bound catches the seam, not the wander */
+        e = in = 0; ne = ni = 0;
+        for (int x = 0; x + 1 < W; x++)
+        {
+            double a = col_agree(platef, W, WF, x, 1, m, v);
+            if ((x + 1) % p0 == 0 || (p1 && (x + 1) % p1 == 0)) { e += a; ne++; }
+            else if (x % 5 == 0) { in += a; ni++; }
+        }
+        e /= ne; in /= ni;
+        snprintf(b, sizeof(b), "%d+%d across its edges %.3f at %d of them, inside it %.3f",
+                 p0, p1, e, ne, in);
+        ok("the plate's edges meet themselves", fabs(e - in) < 0.25, b);
+
+        e = in = 0; ne = ni = 0;
+        for (int y = 0; y + 1 < WF; y++)
+        {
+            double a = row_agree(platef, W, WF, y, 1, m, v);
+            if ((y + 1) % p0 == 0 || (p1 && (y + 1) % p1 == 0)) { e += a; ne++; }
+            else if (y % 5 == 0) { in += a; ni++; }
+        }
+        e /= ne; in /= ni;
+        snprintf(b, sizeof(b), "%d+%d down its edges %.3f at %d of them, inside it %.3f",
+                 p0, p1, e, ne, in);
+        ok("the plate's edges meet themselves down the print", fabs(e - in) < 0.25, b);
+
+        if (p1)
+        {
+            r0 = col_agree(platef, W, WF, 40, p0, m, v);
+            r1 = col_agree(platef, W, WF, 40, p1, m, v);
+            snprintf(b, sizeof(b), "%d+%d one plate along: %.3f at %d columns, %.3f at %d",
+                     p0, p1, r0, p0, r1, p1);
+            ok("the pair does not repeat a column", fabs(r0) < 0.98 && fabs(r1) < 0.98, b);
+        }
+    }
+}
+
 int main(void)
 {
     char b[200];
     static const int mono[2] = { 0, 1 };
     /* the clumps, in 1/256 of a print pixel: a draw a pixel, then a quarter of one and up */
     static const int cs[] = { 0, 64, 128, 256, 384, 512, 640 };
-    /* with a plate on, read it from its own corner, so the test knows where its edges fall */
-    if (getenv("FOS_PLATE")) setenv("FOS_PLATE_ORIGIN", "0", 1);
 
     /* the strength is the film stock's at every clump */
     for (int m = 0; m < 2; m++)
@@ -228,62 +304,12 @@ int main(void)
         }
     }
 
-    /* the strength is an absolute number of levels at a one pixel clump, where the grain is a draw
-     * a pixel: a plate has to come to the same number, not to a fraction or a multiple of it. The
-     * grain itself draws 5.33 levels in colour at 120 (#188, review). */
-    {
-        double s, a1, a2;
-        measure(0, 256, 120, &s, &a1, &a2);
-        snprintf(b, sizeof(b), "clump 1 px: %.2f levels against the grain's own 5.33", s);
-        ok("the strength is the stock's, not a fraction of it", fabs(s - 5.33) < 0.25, b);
-    }
-
-    /* with a plate: its edges meet themselves -- the sample that runs off one edge meets the draws
-     * of the other, so no line shows there -- and a pair of plates does not repeat a column inside
-     * the print (#188, review) */
-    if (getenv("FOS_PLATE"))
-    {
-        int p0 = 1 << atoi(getenv("FOS_PLATE"));
-        const char *s2 = getenv("FOS_PLATE2");
-        int p1 = s2 && atoi(s2) >= 64 ? atoi(s2) : 0;
-        double m, v, e, in, r0, r1;
-        int ne, ni;
-
-        fos_dev_test_grain(platef, W, WF, 256, 2400, 0, 120);
-        mean_var(platef, W, WF, &m, &v);
-
-        e = in = 0; ne = ni = 0;
-        for (int x = 0; x + 1 < W; x++)
-        {
-            double a = col_agree(platef, W, WF, x, 1, m, v);
-            if ((x + 1) % p0 == 0 || (p1 && (x + 1) % p1 == 0)) { e += a; ne++; }
-            else if (x % 5 == 0) { in += a; ni++; }
-        }
-        e /= ne; in /= ni;
-        snprintf(b, sizeof(b), "across its edges %.3f at %d of them, inside it %.3f", e, ne, in);
-        /* the seam this is for takes about 0.9 off the agreement; the estimate itself wanders by a
-         * tenth or so, so the bound is set to catch the seam and not the wander */
-        ok("the plate's edges meet themselves", fabs(e - in) < 0.25, b);
-
-        e = in = 0; ne = ni = 0;
-        for (int y = 0; y + 1 < WF; y++)
-        {
-            double a = row_agree(platef, W, WF, y, 1, m, v);
-            if ((y + 1) % p0 == 0 || (p1 && (y + 1) % p1 == 0)) { e += a; ne++; }
-            else if (y % 5 == 0) { in += a; ni++; }
-        }
-        e /= ne; in /= ni;
-        snprintf(b, sizeof(b), "down its edges %.3f at %d of them, inside it %.3f", e, ne, in);
-        ok("the plate's edges meet themselves down the print", fabs(e - in) < 0.25, b);
-
-        if (p1)
-        {
-            r0 = col_agree(platef, W, WF, 40, p0, m, v);
-            r1 = col_agree(platef, W, WF, 40, p1, m, v);
-            snprintf(b, sizeof(b), "one plate along: %.3f at %d columns, %.3f at %d", r0, p0, r1, p1);
-            ok("the pair does not repeat a column", fabs(r0) < 0.98 && fabs(r1) < 0.98, b);
-        }
-    }
+    /* the same checks with the grain drawn into a plate: the camera's own pair, and one whose
+     * first plate is not a power of two, which the knobs allow and which CI would never pass on
+     * its own -- so the one run of this test covers the plate too */
+    check_plate(NULL, NULL);
+    check_plate("8", "257");
+    check_plate("7", "127");
 
     printf("graintest: %s\n", fail ? "failed" : "all passed");
     return fail;
