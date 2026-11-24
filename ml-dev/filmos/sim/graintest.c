@@ -97,6 +97,9 @@ static void mean_var(const uint8_t *p, int w, int h, double *m, double *v)
 
 /* how much a pixel's grain agrees with the one d along the row, and with the one d down the
  * column, in the terms measure() uses */
+/* Both columns are centred on the field's own mean, not on their own: a pair that repeats still
+ * reads exactly 1, which is what the repeat guard turns on, while the edge readings are a shifted
+ * correlation whose bounds are the measured ones.  v is past the point of the correlation. */
 static double col_agree(const uint8_t *p, int w, int h, int x, int d, double m, double v)
 {
     double s = 0, a2 = 0, b2 = 0;
@@ -135,10 +138,13 @@ static void check_plate(const char *lg, const char *p2)
     char b[200];
     int p0 = lg ? 1 << atoi(lg) : 0;
     int p1 = lg && p2 && atoi(p2) >= 64 ? atoi(p2) : 0;
-    /* the checks index the field at x + these, and count edges modulo them: refuse a pair that would
-     * read past the field or leave no edge to find (#188, review) */
-    if (lg && (p0 < 4 || p0 > W - 2 || p0 > WF - 2)) { printf("skip  a plate of %d is not checkable here\n", p0); return; }
-    if (p1 > W - 2 || p1 > WF - 2) { printf("skip  a second plate of %d is not checkable here\n", p1); return; }
+    /* The checks read the field at x + these and count edges modulo them: refuse a pair that would
+     * read past the field, leave no edge to find, or be too small for the plate to be built at all
+     * - plate_lg under 6 leaves the grain drawn, and the checks would then pass on nothing (#188). */
+    if (lg && (p0 < 64 || p0 > W - 2 || p0 > WF - 2))
+    { printf("skip  a plate of %d is not checkable here\n", p0); return; }
+    if (p1 && (p1 < 64 || p1 > W - 2 || p1 > WF - 2))
+    { printf("skip  a second plate of %d is not checkable here\n", p1); return; }
     if (lg)
     {
         setenv("FOS_PLATE", lg, 1);
@@ -205,8 +211,9 @@ static void check_plate(const char *lg, const char *p2)
 
         if (p1)
         {
-            r0 = col_agree(platef, W, WF, 40, p0, m, v);
-            r1 = col_agree(platef, W, WF, 40, p1, m, v);
+            /* read from column 0, which is what makes the clamp's p <= W - 2 the whole bound */
+            r0 = col_agree(platef, W, WF, 0, p0, m, v);
+            r1 = col_agree(platef, W, WF, 0, p1, m, v);
             snprintf(b, sizeof(b), "%d+%d one plate along: %.3f at %d columns, %.3f at %d",
                      p0, p1, r0, p0, r1, p1);
             /* a repeat is 1.000 here, the camera's pair 0.87 and 0.80: an unnormalised sum read the
@@ -324,6 +331,15 @@ int main(void)
                      fos_dev_test_grain_clump(slow, 400, 3456));
             ok("no clump at all where the print can't show it", fos_dev_test_grain_clump(slow, 400, 3456) <= 26, b);
         }
+    }
+
+    /* the camera's 257 fold, which the simulator never takes, has to be the modulo exactly */
+    {
+        int bad = 0;
+        for (int x = -300; x < 40000; x++)
+            if (fos_dev_test_fold257(x) != ((x % 257) + 257) % 257) bad++;
+        snprintf(b, sizeof(b), "%d of 40300 differ from the modulo", bad);
+        ok("the 257 fold is the modulo", bad == 0, b);
     }
 
     /* the same checks with the grain drawn into a plate: the camera's own pair of 256 and 257, one

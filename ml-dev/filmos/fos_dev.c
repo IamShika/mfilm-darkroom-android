@@ -2467,9 +2467,10 @@ static int plate_nf, plate_q3, plate_q2, plate_q1, plate_q0;
 static int plate_ox, plate_oy;
 static unsigned plate_tried;                /* the seed a build was attempted for, made or not */
 
-/* Let the pair go: the print that needed it is written, and the room is better spent on the next
- * one's arena.  The key and the attempt go with it, so the next print builds again rather than
- * drawing because a frame's earlier print used the one attempt (#188, review). */
+/* Let the pair go when the develop ends: it is two megabytes that the next frame's arena would
+ * otherwise be asked for around, and a reconstruction of it is cheap next to a print.  The key and
+ * the attempt go with it, so the next print builds again rather than drawing on a spent attempt.
+ * Nothing inside a develop drops it: the arena is older than any plate of that frame (#188). */
 static void plate_drop(void)
 {
     for (int i = 0; i < NPLATE; i++)
@@ -2508,19 +2509,30 @@ static int plate_on(void) { plate_sizes(); return plate_lg; }
 static int pwrap(int i, int w) { return (w & (w - 1)) ? ((i % w) + w) % w : (i & (w - 1)); }
 #endif
 
+/* 257 is 256 + 1, so a coordinate folds to ((x mod 256) - (x >> 8)), less one 257 when that goes
+ * under: a shift, an and and a subtract, for any coordinate under 65536.  A constant modulo does
+ * not become a multiply at -Os, which is what this file is built at: it becomes a call to
+ * __aeabi_uidivmod, and armv5te has no divide (#188, review). */
+FOS_INLINE int fold257(int x)
+{
+    if (x < 0) x += FOS_PLATE2;
+    int r = (x & (FOS_PLATE_SZ - 1)) - (x >> 8);   /* the low 256, less the bits above them */
+    return r < 0 ? r + FOS_PLATE2 : r;
+}
+
 /* a draw at the plate's own coordinates, the wrapped one where it would fall off the plate.  The
- * camera builds at 256 and 257, whose wraps are a mask and a multiply, as plate_at's are: pwrap
- * would put two software divisions (armv5te has none) into every tap of the band's draws, which is
- * 0.02-0.04 s of a frame's build (#188, review). */
+ * camera's two sizes fold with a mask and with fold257 above; only the simulator's knobs, which can
+ * ask for any size, pay pwrap's divisions. */
 FOS_INLINE int plate_draw(unsigned seed, int x, int y, int f, int w, int h, int wrap)
 {
 #ifdef FOS_DEV_TEST
     return (int16_t) draw(seed, wrap ? pwrap(x, w) : x, wrap ? pwrap(y, h) : y, f);
 #else
+    (void) h;
     if (!wrap) return (int16_t) draw(seed, x, y, f);
     if (w == FOS_PLATE_SZ)
         return (int16_t) draw(seed, (unsigned) x & (FOS_PLATE_SZ - 1), (unsigned) y & (FOS_PLATE_SZ - 1), f);
-    return (int16_t) draw(seed, (unsigned) x % FOS_PLATE2, (unsigned) y % FOS_PLATE2, f);
+    return (int16_t) draw(seed, fold257(x), fold257(y), f);
 #endif
 }
 
@@ -2633,13 +2645,13 @@ static int plate_at(int f, int x, int y)
                        + pwrap(x + plate_ox, plate_w[1])];
     return v;
 #else
-    /* the camera's sizes are the constants above, so its wrap is a mask and two multiplies */
+    /* the camera's sizes are the constants above, so its wrap is a mask and the fold above, neither
+     * of which divides: this is the hot loop, and a modulo here would be one a field a pixel */
     int xx = x + plate_ox, yy = y + plate_oy;
     int v = plate[0][((size_t) f * FOS_PLATE_SZ + (yy & (FOS_PLATE_SZ - 1))) * FOS_PLATE_SZ
                      + (xx & (FOS_PLATE_SZ - 1))];
     if (plate[1])
-        v += plate[1][((size_t) f * FOS_PLATE2 + (unsigned) yy % FOS_PLATE2) * FOS_PLATE2
-                       + (unsigned) xx % FOS_PLATE2];
+        v += plate[1][((size_t) f * FOS_PLATE2 + fold257(yy)) * FOS_PLATE2 + fold257(xx)];
     return v;
 #endif
 }
@@ -2722,6 +2734,10 @@ int fos_dev_test_grain_clump(const struct fos_look *f, int w, int full) { return
 /* forget the plates and the sizes they were read at, so a test can set the knobs again and have
  * the next row build another pair: what the camera never does, and what the plate's checks need
  * to cover more than one size (#188) */
+/* the fold the camera wraps the 257 with, for graintest: only the camera takes that branch, and a
+ * mask of the wrong power of two in it passed every other check here (#188, review) */
+int fos_dev_test_fold257(int x) { return fold257(x); }
+
 void fos_dev_test_plate_reset(void)
 {
     plate_drop();
@@ -2882,10 +2898,6 @@ static void glow_pos_at(float p, int n, uint8_t *cell, uint8_t *frac)
 /* its files open, its tables made; the picture then comes BIG_ROWS rows at a time */
 static void big_begin(struct fos_dev *d)
 {
-    /* the screen print's pair is done with, and its two megabytes are the ones the big print's
-     * arena would otherwise go without: on a tight camera the plate could be what costs the print
-     * a size (#188, review) */
-    plate_drop();
     const int bw = d->bw, bh = d->bh;
     char msg[200];
     for (int x = 0; x < bw; x++) { float t = 2.0f * x / (bw - 1) - 1; d->bvig_x[x] = (int16_t) (0.06f * t * t * 4096); }
