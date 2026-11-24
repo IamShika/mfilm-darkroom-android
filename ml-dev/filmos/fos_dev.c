@@ -1959,8 +1959,11 @@ int fos_dev_made(const struct fos_dev *d, int *w, int *h)
     return d && d->big ? d->bsize : FOS_SIZE_S;
 }
 
+static void plate_drop(void);               /* the pair is the develop's memory too */
+
 void fos_dev_free(struct fos_dev *d)
 {
+    plate_drop();
     if (!d) return;
     if (d->f) fos_port_close(d->f);
     fos_port_free(d->buf); fos_port_free(d->rowoff); fos_port_free(d->seg_of);
@@ -2450,8 +2453,9 @@ FOS_INLINE int grain_row(const int16_t *w, int x, int q3, int q2, int q1, int q0
  * least common multiple of their sizes, so two plates a few hundred pixels across whose sizes
  * share no factor give an effective period longer than any print, for a couple of megabytes.
  * FOS_PLATE and FOS_PLATE2 are the simulator's knobs; the camera's two sizes are the constants
- * below, and it builds the pair again for each print of a frame and holds it while that print is
- * written -- the seed and the taps are the key, so a change of either builds again. --- */
+ * below.  It builds the pair again for each print of a frame -- the seed and the taps are the key,
+ * so a change of either builds again -- and lets it go before the next print's arena is asked for,
+ * and when the develop ends, so the two megabytes are not held against the frame. --- */
 #define NPLATE 2
 #define FOS_PLATE_LG 8       /* the first plate is 256 x 256, and 257 beside it */
 #define FOS_PLATE_SZ (1 << FOS_PLATE_LG)
@@ -2462,6 +2466,21 @@ static unsigned plate_seed;
 static int plate_nf, plate_q3, plate_q2, plate_q1, plate_q0;
 static int plate_ox, plate_oy;
 static unsigned plate_tried;                /* the seed a build was attempted for, made or not */
+
+/* Let the pair go: the print that needed it is written, and the room is better spent on the next
+ * one's arena.  The key and the attempt go with it, so the next print builds again rather than
+ * drawing because a frame's earlier print used the one attempt (#188, review). */
+static void plate_drop(void)
+{
+    for (int i = 0; i < NPLATE; i++)
+    {
+        fos_port_free(plate[i]);
+        plate[i] = NULL;
+        plate_w[i] = plate_h[i] = 0;
+    }
+    plate_seed = 0; plate_nf = 0; plate_tried = 0;
+    plate_q3 = plate_q2 = plate_q1 = plate_q0 = 0;
+}
 static int plate_lg = -1, plate2_sz = -1;
 
 static void plate_sizes(void)
@@ -2481,15 +2500,28 @@ static void plate_sizes(void)
 
 static int plate_on(void) { plate_sizes(); return plate_lg; }
 
-/* a wrap that holds for a size that is not a power of two, and the mask when it is.  The camera
- * asks for 256 and 257, whose wraps compile to a mask and a multiply (plate_at); this is for the
- * simulator's knobs, which can ask for anything. */
+#ifdef FOS_DEV_TEST
+/* a wrap that holds for a size that is not a power of two, and the mask when it is: for the
+ * simulator's knobs, which can ask for anything.  The camera's own wraps - the read in plate_at and
+ * the build in plate_draw - are written against its two sizes instead, where they compile to a mask
+ * and a multiply, so this is not in its build at all. */
 static int pwrap(int i, int w) { return (w & (w - 1)) ? ((i % w) + w) % w : (i & (w - 1)); }
+#endif
 
-/* a draw at the plate's own coordinates, the wrapped one where it would fall off the plate */
+/* a draw at the plate's own coordinates, the wrapped one where it would fall off the plate.  The
+ * camera builds at 256 and 257, whose wraps are a mask and a multiply, as plate_at's are: pwrap
+ * would put two software divisions (armv5te has none) into every tap of the band's draws, which is
+ * 0.02-0.04 s of a frame's build (#188, review). */
 FOS_INLINE int plate_draw(unsigned seed, int x, int y, int f, int w, int h, int wrap)
 {
+#ifdef FOS_DEV_TEST
     return (int16_t) draw(seed, wrap ? pwrap(x, w) : x, wrap ? pwrap(y, h) : y, f);
+#else
+    if (!wrap) return (int16_t) draw(seed, x, y, f);
+    if (w == FOS_PLATE_SZ)
+        return (int16_t) draw(seed, (unsigned) x & (FOS_PLATE_SZ - 1), (unsigned) y & (FOS_PLATE_SZ - 1), f);
+    return (int16_t) draw(seed, (unsigned) x % FOS_PLATE2, (unsigned) y % FOS_PLATE2, f);
+#endif
 }
 
 /* one row of the blend about (x, y), 1/256, from the plate's draws: the same taps grain_row blends
@@ -2692,15 +2724,8 @@ int fos_dev_test_grain_clump(const struct fos_look *f, int w, int full) { return
  * to cover more than one size (#188) */
 void fos_dev_test_plate_reset(void)
 {
-    for (int i = 0; i < NPLATE; i++)
-    {
-        fos_port_free(plate[i]);
-        plate[i] = NULL;
-        plate_w[i] = plate_h[i] = 0;
-    }
-    plate_lg = -1; plate2_sz = -1; plate_tried = 0;
-    plate_seed = 0; plate_nf = 0;
-    plate_q3 = plate_q2 = plate_q1 = plate_q0 = 0;
+    plate_drop();
+    plate_lg = -1; plate2_sz = -1;           /* and the sizes, which the camera never changes */
 }
 
 void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, int level)
@@ -2857,6 +2882,10 @@ static void glow_pos_at(float p, int n, uint8_t *cell, uint8_t *frac)
 /* its files open, its tables made; the picture then comes BIG_ROWS rows at a time */
 static void big_begin(struct fos_dev *d)
 {
+    /* the screen print's pair is done with, and its two megabytes are the ones the big print's
+     * arena would otherwise go without: on a tight camera the plate could be what costs the print
+     * a size (#188, review) */
+    plate_drop();
     const int bw = d->bw, bh = d->bh;
     char msg[200];
     for (int x = 0; x < bw; x++) { float t = 2.0f * x / (bw - 1) - 1; d->bvig_x[x] = (int16_t) (0.06f * t * t * 4096); }
