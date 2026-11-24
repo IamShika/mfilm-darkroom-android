@@ -384,6 +384,23 @@ def width_16384(f):
     return widest(f)
 
 
+def width_16384_no_crop(f):
+    """the same, its sensor's picture area 4 GB into the file: the darkroom
+    works one out from the frame's size, 16087 columns wide (mkcr2's has
+    1296, at the left)"""
+    return sensor_info_huge(widest(f))
+
+
+def width_16384_edges(f):
+    """the same, its sensor's picture area as wide as the frame: its first
+    and last columns print as well (the one worked out leaves them out)"""
+    f = widest(f)
+    si = u32(f, tag_at(f, maker_note(f), 0x00E0))
+    struct.pack_into("<H", f, si + 10, 0)
+    struct.pack_into("<H", f, si + 14, RAW_MAX - 1)
+    return f
+
+
 def width_16385(f):
     """a sample wider than the darkroom takes"""
     return widest(f, 1)
@@ -517,6 +534,8 @@ FILE_WAYS = [
     ("samples-most", samples_most, "develops"),
     ("samples-too-many", samples_too_many, SIZE),
     ("width-16384", width_16384, "develops"),
+    ("width-16384-no-crop", width_16384_no_crop, "develops"),
+    ("width-16384-edges", width_16384_edges, "develops"),
     ("width-16385", width_16385, SIZE),
     ("raw-ifd-huge", raw_ifd_huge, "no RAW in this file"),
     ("raw-offset-huge", raw_offset_huge, "can't read the RAW"),
