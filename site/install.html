@@ -68,7 +68,9 @@
       <p data-i18n="ig.1.d">M-Film is made for one exact version of Canon's software. Turn the camera on and look:</p>
       <div class="path"><span>MENU</span><i>→</i><span class="has-i"><svg class="i" aria-hidden="true"><use href="#i-wrench"/></svg><span data-i18n="ig.1.p1">the last settings tab</span></span><i>→</i><span>Firmware ver.</span></div>
       <div class="need-fw"><span data-i18n="ig.1.must">It must say</span> <b id="ig-fw">2.0.2</b></div>
-      <p class="tip" data-i18n="ig.1.tip">Different? Update the camera to exactly that version first, from Canon's support site for your camera. A newer or older one won't work.</p>
+      <!-- data-setup: the cameras a part of the guide is for (js/install.js, setupOf) -->
+      <p class="tip" data-setup="fir usb" data-i18n="ig.1.tip">Different? Update the camera to exactly that version first, from Canon's support site for your camera. A newer or older one won't work.</p>
+      <p class="tip" data-setup="m2" hidden data-i18n="ig.1m.tip">Canon's newest firmware for the M2 is 1.0.4, and M-Film needs 1.0.3: stay on 1.0.3, don't update to 1.0.4.</p>
     </li>
 
     <li id="s2">
@@ -87,16 +89,24 @@
     </li>
 
     <li id="s4">
-      <h3 data-i18n="ig.4.t">Format the card in the camera</h3>
+      <h3 data-setup="fir usb" data-i18n="ig.4.t">Format the card in the camera</h3>
+      <h3 data-setup="m2" hidden data-i18n="ig.4m.t">Delete the old files, without formatting the card</h3>
+      <div data-setup="fir usb">
       <p data-i18n="ig.4.d">Copy any photos you want to keep off the card first: formatting erases everything. Then, in the camera:</p>
       <div class="path"><span>MENU</span><i>→</i><span>Format card</span><i>→</i><span>OK</span></div>
       <p class="tip" data-i18n="ig.4.tip">Format it in the camera, not on the computer.</p>
+      </div>
+      <div data-setup="m2" hidden>
+      <p data-i18n="ig.4m.d">Use the card your M2 already starts Magic Lantern from. Put it in the computer and copy everything off it, to keep it. Then delete autoexec.bin and the ML folder from the card.</p>
+      <p class="tip" data-i18n="ig.4m.tip">Don't format the card: it has to keep its boot flags.</p>
+      </div>
     </li>
 
     <li id="s5">
       <h3 data-i18n="ig.5.t">Copy the files onto the card</h3>
       <!-- Chrome, Edge and Opera on a computer: the page writes the zip onto the card (js/install.js,
-           docs/easy-install.md). Everywhere else this stays hidden and the steps below are the way. -->
+           docs/easy-install.md). Everywhere else, and for the EOS M2, this stays hidden and the steps below
+           are the way. -->
       <div class="ig-easy" id="ig-easy" hidden>
         <b class="ig-easy-t" data-i18n="ig.e.t">Install onto the card from this page</b>
         <p data-i18n="ig.e.d">This browser can download M-Film and copy it onto the card for you. Put the card in the computer, choose it, and press Install.</p>
@@ -112,11 +122,11 @@
       <div class="trees">
         <div class="tree ok">
           <svg class="i" aria-hidden="true"><use href="#i-check"/></svg><b data-i18n="ig.5.ok">Right: on the card itself</b>
-          <code>ML/<br>autoexec.bin<br>ML-SETUP.FIR<br>M-FILM-README.txt</code>
+          <code>ML/<br>autoexec.bin<br><span data-setup="fir">ML-SETUP.FIR<br></span>M-FILM-README.txt</code>
         </div>
         <div class="tree bad">
           <svg class="i" aria-hidden="true"><use href="#i-x"/></svg><b data-i18n="ig.5.bad">Wrong: inside a folder</b>
-          <code>M-Film-…-camera-…/<br><span class="in">ML/</span><br><span class="in">autoexec.bin</span><br><span class="in">ML-SETUP.FIR</span></code>
+          <code>M-Film-…-camera-…/<br><span class="in">ML/</span><br><span class="in">autoexec.bin</span><span data-setup="fir"><br><span class="in">ML-SETUP.FIR</span></span></code>
         </div>
       </div>
       <p class="tip" data-i18n="ig.5.tip">Then eject the card (Windows: the USB icon → Eject; Mac: drag it to the bin) before you take it out.</p>
@@ -124,17 +134,23 @@
     </li>
 
     <li id="s6">
-      <h3 data-i18n="ig.6.t">Run the installer, once</h3>
-      <div id="ig-fir">
+      <h3 data-setup="fir usb" data-i18n="ig.6.t">Run the installer, once</h3>
+      <h3 data-setup="m2" hidden data-i18n="ig.6m.t">Put the card in: there's no installer to run</h3>
+      <div data-setup="fir">
       <p data-i18n="ig.6.d">Camera off, card in, camera on. Then:</p>
       <div class="path"><span>MENU</span><i>→</i><span>Firmware ver.</span><i>→</i><span>SET</span><i>→</i><span>OK</span></div>
       <p data-i18n="ig.6.d2">Magic Lantern's installer appears and says when it's done (a few seconds). Switch the camera off.</p>
       </div>
-      <div id="ig-usb" hidden>
+      <div data-setup="usb" hidden>
       <p data-i18n="ig.6u.d">This camera has no installer on the card: it is done from a computer, with the free program mlinstall, over USB: it is in the zip, in the folder mlinstall-for-your-computer (that folder doesn't go on the card). It takes two clicks: Enable Boot Disk with the camera connected, then Write card boot flags with the card in the reader.</p>
       <a class="btn ghost" href="https://github.com/HNGSeries/mfilm-canon-film-simulation/blob/main/TESTING.md#canon-eos-1300d" data-i18n="ig.6u.btn">The steps, with mlinstall →</a>
       </div>
-      <p class="tip" data-i18n="ig.6.tip">This doesn't replace Canon's firmware: it only tells the camera to start Magic Lantern from the card. You only do it once.</p>
+      <div data-setup="m2" hidden>
+      <p data-i18n="ig.6m.d">Camera off, card in. The M2's zip has no installer (ML-SETUP.FIR), so for now it's for M2s that already start Magic Lantern from a card.</p>
+      <p data-i18n="ig.6m.d2">If your M2 has never run Magic Lantern, mlinstall may set it up as on the 1300D, but no one has tried it on an M2 yet. If you try, tell us what happened.</p>
+      <a class="btn ghost" href="https://github.com/HNGSeries/mfilm-canon-film-simulation/blob/main/TESTING.md#canon-eos-m2" data-i18n="ig.6m.btn">The M2's steps, in TESTING.md →</a>
+      </div>
+      <p class="tip" data-setup="fir usb" data-i18n="ig.6.tip">This doesn't replace Canon's firmware: it only tells the camera to start Magic Lantern from the card. You only do it once.</p>
     </li>
 
     <li id="s7">
@@ -150,15 +166,18 @@
   <section class="ig-help faq">
     <h2 data-i18n="ig.h.t">If something goes wrong</h2>
     <details><summary data-i18n="ig.h.1.q">"Memory card containing firmware is required to update"</summary>
-      <p data-i18n="ig.h.1.a">The camera didn't find the installer it accepts. Either the camera's firmware isn't exactly the version above (step 1), or the files are inside a folder instead of on the card itself (step 5). On a Mac, also run dot_clean (step 5).</p></details>
-    <details><summary data-i18n="ig.h.2.q">"ML directory not found" / "Please copy all ML files"</summary>
+      <p data-setup="fir usb" data-i18n="ig.h.1.a">The camera didn't find the installer it accepts. Either the camera's firmware isn't exactly the version above (step 1), or the files are inside a folder instead of on the card itself (step 5). On a Mac, also run dot_clean (step 5).</p>
+      <p data-setup="m2" hidden data-i18n="ig.h.1m.a">The M2's zip has no installer (ML-SETUP.FIR), so there is nothing to run from Firmware ver.: see step 6.</p></details>
+    <details data-setup="fir usb"><summary data-i18n="ig.h.2.q">"ML directory not found" / "Please copy all ML files"</summary>
       <p data-i18n="ig.h.2.a">The ML folder isn't next to autoexec.bin at the top of the card. Copy what is inside the unzipped folder, the ML folder included. Format in the camera first; with a card bigger than 32 GB, try a 32 GB one.</p></details>
     <details><summary data-i18n="ig.h.3.q">The camera won't start, or the screen stays black</summary>
       <p data-i18n="ig.h.3.a">Take the battery out, then the card. Put the battery back: the camera starts normally, as Canon's camera. Nothing is broken. Tell us which camera and firmware, so we can fix it.</p></details>
     <details><summary data-i18n="ig.h.4.q">Magic Lantern's own menu shows instead of the film shelf</summary>
       <p data-i18n="ig.h.4.a">On some cameras M-Film loads as a module after the camera starts, and it didn't load. The Modules tab says why on its line: tell us what it says.</p></details>
     <details><summary data-i18n="ig.h.5.q">How do I take it off?</summary>
-      <p data-i18n="ig.h.5.a">Format the card in the camera. To stop the camera looking for Magic Lantern at all, run Firmware ver. → update again with the card in, and choose to remove the boot flag.</p></details>
+      <p data-setup="fir" data-i18n="ig.h.5.a">Format the card in the camera. To stop the camera looking for Magic Lantern at all, run Firmware ver. → update again with the card in, and choose to remove the boot flag.</p>
+      <p data-setup="usb" hidden data-i18n="ig.h.5u.a">Format the card in the camera. To stop the camera looking for Magic Lantern at all, connect it to mlinstall and choose Disable Boot Disk.</p>
+      <p data-setup="m2" hidden data-i18n="ig.h.5m.a">Delete autoexec.bin and the ML folder from the card, then copy back what was on it before M-Film, which you kept in step 4. Don't format the card: it has to keep its boot flags, and M-Film's zip has no ML-SETUP.FIR to put them back, or to remove the camera's boot flag. No one has tried mlinstall on an M2 yet.</p></details>
     <p class="muted" data-i18n="ig.h.more">Still stuck? <a class="link" href="https://github.com/HNGSeries/mfilm-canon-film-simulation/issues/new/choose">Ask on GitHub</a>, with your camera and its firmware.</p>
   </section>
 </main>
