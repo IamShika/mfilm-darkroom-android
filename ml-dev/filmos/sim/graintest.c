@@ -79,6 +79,9 @@ static void measure(int mono, int c, int level, double *strength, double *r1, do
     *r2 = c2 / (v * n);
 }
 
+/* the drawn grain's own clump, for the plated runs to be held to */
+static double drawn_a1, drawn_a2;
+
 /* the mean and the variance of a field's green channel */
 static void mean_var(const uint8_t *p, int w, int h, double *m, double *v)
 {
@@ -96,23 +99,31 @@ static void mean_var(const uint8_t *p, int w, int h, double *m, double *v)
  * column, in the terms measure() uses */
 static double col_agree(const uint8_t *p, int w, int h, int x, int d, double m, double v)
 {
-    double s = 0;
+    double s = 0, a2 = 0, b2 = 0;
+    (void) v;
     for (int y = 0; y < h; y++)
-        s += (p[3 * (y * w + x) + 1] - m) * (p[3 * (y * w + x + d) + 1] - m);
-    return s / (v * h);
+    {
+        double a = p[3 * (y * w + x) + 1] - m, b = p[3 * (y * w + x + d) + 1] - m;
+        s += a * b; a2 += a * a; b2 += b * b;
+    }
+    return s / sqrt(a2 * b2 + 1e-9);      /* the correlation: a column that repeats reads 1 */
 }
 
 static double row_agree(const uint8_t *p, int w, int h, int y, int d, double m, double v)
 {
-    double s = 0;
+    double s = 0, a2 = 0, b2 = 0;
+    (void) v;
     for (int x = 0; x < w; x++)
-        s += (p[3 * (y * w + x) + 1] - m) * (p[3 * ((y + d) * w + x) + 1] - m);
-    return s / (v * w);
+    {
+        double a = p[3 * (y * w + x) + 1] - m, b = p[3 * ((y + d) * w + x) + 1] - m;
+        s += a * b; a2 += a * a; b2 += b * b;
+    }
+    return s / sqrt(a2 * b2 + 1e-9);
 }
 
-/* A field tall enough to hold several of every plate's row edges, and wide enough to hold
- * several of its column edges: the plate's agreement across an edge is then averaged over hundreds
- * of rows and several edges, which is what makes the check able to see a seam at all. */
+/* A field tall enough to hold several of every plate's row edges, and wide enough for its column
+ * edges: WF x W is 1000 rows an edge column, and 4 and 6 edge columns for the camera's pair (10 and
+ * 14 for 128+127), which is what lets the check see a seam at all. */
 #define WF 1000
 static uint8_t platef[WF * W * 3];
 
@@ -124,6 +135,10 @@ static void check_plate(const char *lg, const char *p2)
     char b[200];
     int p0 = lg ? 1 << atoi(lg) : 0;
     int p1 = lg && p2 && atoi(p2) >= 64 ? atoi(p2) : 0;
+    /* the checks index the field at x + these, and count edges modulo them: refuse a pair that would
+     * read past the field or leave no edge to find (#188, review) */
+    if (lg && (p0 < 4 || p0 > W - 2 || p0 > WF - 2)) { printf("skip  a plate of %d is not checkable here\n", p0); return; }
+    if (p1 > W - 2 || p1 > WF - 2) { printf("skip  a second plate of %d is not checkable here\n", p1); return; }
     if (lg)
     {
         setenv("FOS_PLATE", lg, 1);
@@ -146,8 +161,13 @@ static void check_plate(const char *lg, const char *p2)
         snprintf(b, sizeof(b), "%s clump 1 px: %.2f levels against the grain's own 5.33",
                  lg ? "plated," : "drawn,", s);
         ok("the strength is the stock's, not a fraction of it", fabs(s - 5.33) < 0.25, b);
+        if (!lg) { drawn_a1 = a1; drawn_a2 = a2; return; }
+        /* the clump is the taps' doing: a plate built from the wrong taps keeps its strength and
+         * loses this, which the strength check alone cannot see (#188, review) */
+        snprintf(b, sizeof(b), "plated, clump 1 px: %.3f and %.3f against the drawn %.3f and %.3f",
+                 a1, a2, drawn_a1, drawn_a2);
+        ok("the plate's clump is the drawn grain's", fabs(a1 - drawn_a1) < 0.06 && fabs(a2 - drawn_a2) < 0.06, b);
     }
-    if (!lg) return;
 
     {
         double m, v, e, in, r0, r1;
@@ -189,7 +209,9 @@ static void check_plate(const char *lg, const char *p2)
             r1 = col_agree(platef, W, WF, 40, p1, m, v);
             snprintf(b, sizeof(b), "%d+%d one plate along: %.3f at %d columns, %.3f at %d",
                      p0, p1, r0, p0, r1, p1);
-            ok("the pair does not repeat a column", fabs(r0) < 0.98 && fabs(r1) < 0.98, b);
+            /* a repeat is 1.000 here, the camera's pair 0.87 and 0.80: an unnormalised sum read the
+             * repeat *lower* than the healthy pair and passed it (#188, review) */
+            ok("the pair does not repeat a column", fabs(r0) < 0.95 && fabs(r1) < 0.95, b);
         }
     }
 }
@@ -304,11 +326,12 @@ int main(void)
         }
     }
 
-    /* the same checks with the grain drawn into a plate: the camera's own pair, and one whose
-     * first plate is not a power of two, which the knobs allow and which CI would never pass on
-     * its own -- so the one run of this test covers the plate too */
+    /* the same checks with the grain drawn into a plate: the camera's own pair of 256 and 257, one
+     * plate on its own, and a smaller pair whose second plate, 127, is awkwardly sized as well --
+     * so the one run of this test covers the plate, and CI does not have to set anything */
     check_plate(NULL, NULL);
     check_plate("8", "257");
+    check_plate("8", NULL);            /* one plate alone, which the camera never builds */
     check_plate("7", "127");
 
     printf("graintest: %s\n", fail ? "failed" : "all passed");
