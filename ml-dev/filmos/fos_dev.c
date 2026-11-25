@@ -2017,8 +2017,11 @@ int fos_dev_made(const struct fos_dev *d, int *w, int *h)
     return d && d->big ? d->bsize : FOS_SIZE_S;
 }
 
+static void plate_drop(void);               /* the pair is the develop's memory too */
+
 void fos_dev_free(struct fos_dev *d)
 {
+    plate_drop();
     if (!d) return;
     if (d->f) fos_port_close(d->f);
     fos_port_free(d->buf); fos_port_free(d->rowoff); fos_port_free(d->seg_of);
@@ -2427,8 +2430,11 @@ static int grain_clump(const struct fos_look *L, int w, int ref)
  * self-similar shape: at u = lag / clump, 0.65 at u = 1, 0.24 at 2, 0.09 at 3, 0.04 at 4. Five taps
  * a pixel apart cannot hold that tail -- their correlation dies at three pixels -- so seven do, and
  * what the fit costs is at worst 0.026 of the correlation, against the 0.03 the measurement itself
- * scatters by. Below a clump of a fifth of a pixel only the centre is drawn, and a pixel of the
- * print costs one draw rather than seven. */
+ * scatters by. A clump below a fifth of a pixel wants only its centre, so a print pixel there costs
+ * one draw a row rather than seven; at the widths the film stocks ask for, finish_grain blends up to
+ * seven rows of up to seven draws, over one field on a black-and-white film stock and four on a
+ * colour one -- up to 49 draws a print pixel, or 196, less the taps the outer widths round to
+ * nothing (Velvia 50's own clump takes 100). */
 static const uint16_t GRAIN_TAP[4][49] = {
    {
     256, 256, 256, 256, 256, 256, 254, 252, 246, 242, 238, 236, 232, 228, 216, 206,
@@ -2486,35 +2492,287 @@ FOS_INLINE int grain_weight(int l)
     return w1 >= w0 ? w0 + ((w1 - w0) * f >> 5) : w0 - ((w0 - w1) * f >> 5);
 }
 
-/* row r's blend about x, 1/256: the one, the three, the five or the seven taps, by the
- * weights grain_taps gave */
-FOS_INLINE int grain_row(unsigned seed, int x, int r, int f, int q3, int q2, int q1, int q0)
+/* a row's blend about x, 1/256, from the draws already about the pixel: the one, the three, the
+ * five or the seven taps, by the weights grain_taps gave. w is the row's eight slots, the column
+ * the pixel wants at the column index and seven. */
+FOS_INLINE int grain_row(const int16_t *w, int x, int q3, int q2, int q1, int q0)
 {
-    int h = q3 * draw(seed, x, r, f);
-    if (q2) h += q2 * (draw(seed, x - 1, r, f) + draw(seed, x + 1, r, f));
-    if (q1) h += q1 * (draw(seed, x - 2, r, f) + draw(seed, x + 2, r, f));
-    if (q0) h += q0 * (draw(seed, x - 3, r, f) + draw(seed, x + 3, r, f));
+    int h = q3 * w[x & 7];
+    if (q2) h += q2 * (w[(x - 1) & 7] + w[(x + 1) & 7]);
+    if (q1) h += q1 * (w[(x - 2) & 7] + w[(x + 2) & 7]);
+    if (q0) h += q0 * (w[(x - 3) & 7] + w[(x + 3) & 7]);
     return h >> 8;
 }
 
+
+/* --- the texture plate, for the assessment of #188's cost.  The grain is spread once into a
+ * texture and then sampled, so a print pixel costs a lookup instead of the spread.  The draws a
+ * plate holds are wrapped at its own edges: it is a torus, so the sample that runs off one edge
+ * blends with the draws of the other and meets itself without a seam (#188, review).  This frame
+ * reads it from its own origin, taken from the frame's seed, so that two frames do not show the
+ * grain in the same places (#188).
+ *
+ * A plate is periodic and so carries a period.  Two of them stacked are periodic only at the
+ * least common multiple of their sizes, so two plates a few hundred pixels across whose sizes
+ * share no factor give an effective period longer than any print, for a couple of megabytes.
+ * FOS_PLATE and FOS_PLATE2 are the simulator's knobs; the camera's two sizes are the constants
+ * below.  It builds the pair again for each print of a frame -- the seed and the taps are the key,
+ * so a change of either builds again -- and lets it go before the next print's arena is asked for,
+ * and when the develop ends, so the two megabytes are not held against the frame. --- */
+#define NPLATE 2
+#define FOS_PLATE_LG 8       /* the first plate is 256 x 256, and 257 beside it */
+#define FOS_PLATE_SZ (1 << FOS_PLATE_LG)
+#define FOS_PLATE2 257       /* shares no factor with the 256: the pair repeats at 65,792 */
+static int32_t *plate[NPLATE];
+static int plate_w[NPLATE], plate_h[NPLATE];
+static unsigned plate_seed;
+static int plate_nf, plate_q3, plate_q2, plate_q1, plate_q0;
+static int plate_ox, plate_oy;
+static unsigned plate_tried;                /* the seed a build was attempted for, made or not */
+
+/* Let the pair go when the develop ends: it is two megabytes that the next frame's arena would
+ * otherwise be asked for around, and a reconstruction of it is cheap next to a print.  The key and
+ * the attempt go with it, so the next print builds again rather than drawing on a spent attempt.
+ * Nothing inside a develop drops it: the arena is older than any plate of that frame (#188). */
+static void plate_drop(void)
+{
+    for (int i = 0; i < NPLATE; i++)
+    {
+        fos_port_free(plate[i]);
+        plate[i] = NULL;
+        plate_w[i] = plate_h[i] = 0;
+    }
+    plate_seed = 0; plate_nf = 0; plate_tried = 0;
+    plate_q3 = plate_q2 = plate_q1 = plate_q0 = 0;
+}
+static int plate_lg = -1, plate2_sz = -1;
+
+static void plate_sizes(void)
+{
+    if (plate_lg >= 0) return;
+#ifdef FOS_DEV_TEST
+    const char *a = getenv("FOS_PLATE"), *b = getenv("FOS_PLATE2");   /* the simulator's knobs */
+    plate_lg = a ? atoi(a) : 0;
+    if (plate_lg < 6) plate_lg = 0;                     /* 64 or more, or the drawn grain */
+    plate2_sz = b ? atoi(b) : 0;
+    if (plate2_sz < 64) plate2_sz = 0;
+#else
+    plate_lg = FOS_PLATE_LG;                            /* 256 x 256, and 257 beside it */
+    plate2_sz = FOS_PLATE2;
+#endif
+}
+
+static int plate_on(void) { plate_sizes(); return plate_lg; }
+
+#ifdef FOS_DEV_TEST
+/* a wrap that holds for a size that is not a power of two, and the mask when it is: for the
+ * simulator's knobs, which can ask for anything.  The camera's own wraps - the read in plate_at and
+ * the build in plate_draw - are written against its two sizes instead, where they compile to a mask
+ * and a multiply, so this is not in its build at all. */
+static int pwrap(int i, int w) { return (w & (w - 1)) ? ((i % w) + w) % w : (i & (w - 1)); }
+#endif
+
+/* 257 is 256 + 1, so a coordinate folds to ((x mod 256) - (x >> 8)), less one 257 when that goes
+ * under: a shift, an and and a subtract, for any coordinate under 65536.  A constant modulo does
+ * not become a multiply at -Os, which is what this file is built at: it becomes a call to
+ * __aeabi_uidivmod, and armv5te has no divide (#188, review). */
+FOS_INLINE int fold257(int x)
+{
+    if (x < 0) x += FOS_PLATE2;
+    int r = (x & (FOS_PLATE_SZ - 1)) - (x >> 8);   /* the low 256, less the bits above them */
+    return r < 0 ? r + FOS_PLATE2 : r;
+}
+
+/* a draw at the plate's own coordinates, the wrapped one where it would fall off the plate.  The
+ * camera's two sizes fold with a mask and with fold257 above; only the simulator's knobs, which can
+ * ask for any size, pay pwrap's divisions. */
+FOS_INLINE int plate_draw(unsigned seed, int x, int y, int f, int w, int h, int wrap)
+{
+#ifdef FOS_DEV_TEST
+    return (int16_t) draw(seed, wrap ? pwrap(x, w) : x, wrap ? pwrap(y, h) : y, f);
+#else
+    (void) h;
+    if (!wrap) return (int16_t) draw(seed, x, y, f);
+    if (w == FOS_PLATE_SZ)
+        return (int16_t) draw(seed, (unsigned) x & (FOS_PLATE_SZ - 1), (unsigned) y & (FOS_PLATE_SZ - 1), f);
+    return (int16_t) draw(seed, fold257(x), fold257(y), f);
+#endif
+}
+
+/* one row of the blend about (x, y), 1/256, from the plate's draws: the same taps grain_row blends
+ * along a row of the drawn grain, so the plate holds what the drawn grain would hold there */
+static int plate_row_at(unsigned seed, int x, int y, int f, int w, int h, int wrap,
+                        int q3, int q2, int q1, int q0)
+{
+    int v = q3 * plate_draw(seed, x, y, f, w, h, wrap);
+    if (q2) v += q2 * (plate_draw(seed, x - 1, y, f, w, h, wrap)
+                     + plate_draw(seed, x + 1, y, f, w, h, wrap));
+    if (q1) v += q1 * (plate_draw(seed, x - 2, y, f, w, h, wrap)
+                     + plate_draw(seed, x + 2, y, f, w, h, wrap));
+    if (q0) v += q0 * (plate_draw(seed, x - 3, y, f, w, h, wrap)
+                     + plate_draw(seed, x + 3, y, f, w, h, wrap));
+    return v >> 8;
+}
+
+/* one plate pixel's value at the index the sample reads: the same sum finish_grain makes for a
+ * print pixel, with the plate's draws instead of the print's */
+static int plate_px(unsigned seed, int i, int j, int f, int w, int h, int wrap, int two,
+                    int q3, int q2, int q1, int q0)
+{
+    int x = i - 3, y = j - 3;
+    int v = q3 * plate_row_at(seed, x, y, f, w, h, wrap, q3, q2, q1, q0);
+    if (q2) v += q2 * (plate_row_at(seed, x, y - 1, f, w, h, wrap, q3, q2, q1, q0)
+                     + plate_row_at(seed, x, y + 1, f, w, h, wrap, q3, q2, q1, q0));
+    if (q1) v += q1 * (plate_row_at(seed, x, y - 2, f, w, h, wrap, q3, q2, q1, q0)
+                     + plate_row_at(seed, x, y + 2, f, w, h, wrap, q3, q2, q1, q0));
+    if (q0) v += q0 * (plate_row_at(seed, x, y - 3, f, w, h, wrap, q3, q2, q1, q0)
+                     + plate_row_at(seed, x, y + 3, f, w, h, wrap, q3, q2, q1, q0));
+    v >>= 8;
+    if (two) v = v * 181 >> 8;          /* two plates stacked: 181/256 is 1/sqrt 2 */
+    return v;
+}
+
+static int plate_make(int which, unsigned seed, int nf, int w, int h, int q3, int q2, int q1, int q0)
+{
+    fos_port_free(plate[which]);
+    plate[which] = (int32_t *) fos_port_alloc(nf * w * h * (int) sizeof(int32_t));
+    if (!plate[which]) return 0;
+    int two = plate_lg && plate2_sz;
+    for (int f = 0; f < nf; f++)
+    {
+        /* the middle of the plate holds the sample from its index 6 on, where no draw the blend
+         * wants falls off it */
+        for (int j = 6; j < h; j++)
+            for (int i = 6; i < w; i++)
+                plate[which][((size_t) f * h + j) * w + i] =
+                    plate_px(seed, i, j, f, w, h, 0, two, q3, q2, q1, q0);
+        /* the six rows and the six columns at its near edge do: the wrapped draws go there, so the
+         * sample that runs off the plate meets the draws its other edge holds (#188, review) */
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < w; i++)
+                if (i < 6 || j < 6)
+                    plate[which][((size_t) f * h + j) * w + i] =
+                        plate_px(seed, i, j, f, w, h, 1, two, q3, q2, q1, q0);
+    }
+    plate_w[which] = w; plate_h[which] = h;
+#ifdef FOS_DEV_TEST
+    if (getenv("FOS_PLATE_DEBUG"))
+        fprintf(stderr, "plate: %d x %d x %d fields built, %.1f MB\n", w, h, nf,
+                (double) (size_t) nf * w * h * sizeof(int32_t) / 1048576.0);
+#endif
+    return 1;
+}
+
+static void plate_build(unsigned seed, int nf, int q3, int q2, int q1, int q0)
+{
+    plate_sizes();
+    plate_tried = seed;                 /* one attempt to a frame, not one to a row: the pool runs short */
+#ifdef FOS_DEV_TEST
+    const char *ew = getenv("FOS_PLATE_W"), *eh = getenv("FOS_PLATE_H");
+    int pw = ew ? atoi(ew) : (1 << plate_lg), ph = eh ? atoi(eh) : pw;
+    if (pw < 64) pw = 64;               /* a plate narrower than this holds nothing to sample */
+    if (ph < 64) ph = 64;
+#else
+    int pw = 1 << plate_lg, ph = pw;
+#endif
+    if (!plate_make(0, seed, nf, pw, ph, q3, q2, q1, q0)) return;
+    if (plate2_sz && !plate_make(1, seed ^ 0x9e3779b9u, nf, plate2_sz, plate2_sz, q3, q2, q1, q0))
+    { fos_port_free(plate[0]); plate[0] = NULL; return; }
+    /* the key last, once the pair is there: a build that failed leaves it unset, and no later row
+     * of this frame asks for it again (finish_grain holds it to plate_tried) */
+    plate_seed = seed; plate_nf = nf; plate_q3 = q3; plate_q2 = q2; plate_q1 = q1; plate_q0 = q0;
+#ifdef FOS_DEV_TEST
+    const char *o = getenv("FOS_PLATE_ORIGIN");         /* the small print's own corner is (0,0) */
+    if (o)
+    {
+        plate_ox = atoi(o);
+        const char *c = strchr(o, ',');
+        plate_oy = c ? atoi(c + 1) : 0;
+    }
+    else
+#endif
+    {
+        plate_ox = (int) ((seed >> 7) % (unsigned) plate_w[0]);
+        plate_oy = (int) ((seed >> 19) % (unsigned) plate_h[0]);
+    }
+}
+
+static int plate_at(int f, int x, int y)
+{
+#ifdef FOS_DEV_TEST
+    /* the knobs can ask for any size, so each plate is wrapped at the size it was built at */
+    int v = plate[0][((size_t) f * plate_h[0] + pwrap(y + plate_oy, plate_h[0])) * plate_w[0]
+                     + pwrap(x + plate_ox, plate_w[0])];
+    if (plate[1])
+        v += plate[1][((size_t) f * plate_h[1] + pwrap(y + plate_oy, plate_h[1])) * plate_w[1]
+                       + pwrap(x + plate_ox, plate_w[1])];
+    return v;
+#else
+    /* the camera's sizes are the constants above, so its wrap is a mask and the fold above, neither
+     * of which divides: this is the hot loop, and a modulo here would be one a field a pixel */
+    int xx = x + plate_ox, yy = y + plate_oy;
+    int v = plate[0][((size_t) f * FOS_PLATE_SZ + (yy & (FOS_PLATE_SZ - 1))) * FOS_PLATE_SZ
+                     + (xx & (FOS_PLATE_SZ - 1))];
+    if (plate[1])
+        v += plate[1][((size_t) f * FOS_PLATE2 + fold257(yy)) * FOS_PLATE2 + fold257(xx)];
+    return v;
+#endif
+}
+
 /* n pixels of row y from o, the print's column x0: the grain, the draws about the pixel spread
- * together, for one field, or one shared and one for each colour */
+ * together, for one field, or one shared and one for each colour.
+ *
+ * The draws about a pixel are the same rows and columns the pixel before it wanted, moved along
+ * by one: one column is new and the rest were drawn for that pixel, so a print pixel costs a draw
+ * a row a field, the picture unchanged (#188).  The taps reach as far as the clump asks and no
+ * further: at a clump below a fifth of a pixel they are the centre alone, and one draw a print
+ * pixel is all this costs (#188, review). */
 static __attribute__((noinline)) void finish_grain(uint8_t *o, int n, unsigned seed, int grain, int mono,
                                                    int x0, int y, int q3, int q2, int q1, int q0)
 {
     const int nf = mono ? 1 : 4;
+    const int vx = q0 ? 3 : q1 ? 2 : q2 ? 1 : 0;        /* how far the taps reach, both ways */
+    int pl = plate_on();
+    if (pl)
+    {
+        if (!plate[0])
+        {
+            /* nothing to read: one attempt to a frame, not one to every row of it */
+            if (plate_tried != seed) plate_build(seed, nf, q3, q2, q1, q0);
+        }
+        else if (plate_nf != nf || plate_seed != seed
+                 || plate_q3 != q3 || plate_q2 != q2 || plate_q1 != q1 || plate_q0 != q0)
+            plate_build(seed, nf, q3, q2, q1, q0);  /* the film's, or a wider clump's: build again */
+        if (!plate[0]) pl = 0;                          /* no room this frame: draw the grain */
+    }
+    int16_t win[7][4][8];               /* the draws about the pixel, a column a slot */
+    if (!pl)
+    for (int r = 0; r <= 2 * vx; r++)
+        for (int f = 0; f < nf; f++)
+            for (int k = -vx; k < vx; k++)
+                win[r][f][(x0 + k) & 7] = (int16_t) draw(seed, x0 + k, y - vx + r, f);
     for (uint8_t *e = o + 3 * n; o < e; o += 3, x0++)
     {
         int k[4];
+        if (pl)
+        {
+            for (int f = 0; f < nf; f++) k[f] = plate_at(f, x0, y);
+        }
+        else
+        {
+        for (int r = 0; r <= 2 * vx; r++)
+            for (int f = 0; f < nf; f++)
+                win[r][f][(x0 + vx) & 7] = (int16_t) draw(seed, x0 + vx, y - vx + r, f);
         for (int f = 0; f < nf; f++)
         {
-            /* this row and the two (or four) about it, each already blended along the row (the 8
-             * bits off each keeps the products in 32) */
-            int v = q3 * grain_row(seed, x0, y, f, q3, q2, q1, q0);
-            if (q2) v += q2 * (grain_row(seed, x0, y - 1, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 1, f, q3, q2, q1, q0));
-            if (q1) v += q1 * (grain_row(seed, x0, y - 2, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 2, f, q3, q2, q1, q0));
-            if (q0) v += q0 * (grain_row(seed, x0, y - 3, f, q3, q2, q1, q0) + grain_row(seed, x0, y + 3, f, q3, q2, q1, q0));
+            /* this row and the two (or four, or six) about it, each already blended along the
+             * row (the 8 bits off each keeps the products in 32) */
+            int v = q3 * grain_row(win[vx][f], x0, q3, q2, q1, q0);
+            if (q2) v += q2 * (grain_row(win[vx - 1][f], x0, q3, q2, q1, q0) + grain_row(win[vx + 1][f], x0, q3, q2, q1, q0));
+            if (q1) v += q1 * (grain_row(win[vx - 2][f], x0, q3, q2, q1, q0) + grain_row(win[vx + 2][f], x0, q3, q2, q1, q0));
+            if (q0) v += q0 * (grain_row(win[vx - 3][f], x0, q3, q2, q1, q0) + grain_row(win[vx + 3][f], x0, q3, q2, q1, q0));
             k[f] = v >> 8;
+        }
         }
         const int l = (o[0] * 54 + o[1] * 183 + o[2] * 19) >> 8, wgt = grain_weight(l);
         for (int ch = 0; ch < 3; ch++)
@@ -2536,6 +2794,19 @@ int fos_dev_test_grain_clump(const struct fos_look *f, int w, int full) { return
 
 /* the grain alone, for graintest: h rows of w pixels at the film stock's strength, on the flat
  * grey given (no picture about it), in clumps of sigma c (1/256 of a pixel) */
+/* forget the plates and the sizes they were read at, so a test can set the knobs again and have
+ * the next row build another pair: what the camera never does, and what the plate's checks need
+ * to cover more than one size (#188) */
+/* the fold the camera wraps the 257 with, for graintest: only the camera takes that branch, and a
+ * mask of the wrong power of two in it passed every other check here (#188, review) */
+int fos_dev_test_fold257(int x) { return fold257(x); }
+
+void fos_dev_test_plate_reset(void)
+{
+    plate_drop();
+    plate_lg = -1; plate2_sz = -1;           /* and the sizes, which the camera never changes */
+}
+
 void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, int level)
 {
     int q3, q2, q1, q0;
@@ -2580,9 +2851,11 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
     finish_pos(d->lin + 3 * (y * W + px0), d->pos, pw, 4096 - d->vig_y[y], d->vig_x,
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal, (int) (L->hal_thr * 4096));
     finish_lut(d->pos, o + 3 * px0, pw);
-    int c = grain_clump(L, W, grain_ref(d)), q3, q2, q1, q0;
+    int c = grain_clump(L, pw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    /* the clump is the print's own width's, as the enlargement's is: the screen print is only
+     * FOS_PRINT_W wide on a landscape frame, and a portrait or cropped one is narrower still */
     if (grain) finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono, px0, y, q3, q2, q1, q0);
 }
 
