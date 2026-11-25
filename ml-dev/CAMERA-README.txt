@@ -59,6 +59,14 @@ Update to a new version
      boot flags in mlinstall again).
   Your settings go back to their defaults.
 
+Develop on your computer: Darkrooms
+  The camera develops a roll slowly, at a smaller size. Darkrooms, a separate program for
+  Windows and Mac, develops it on your computer from the full RAW, with the same colour tables.
+  Plug the camera in (or put its card in a reader) and open it.
+  Free: one roll a day (up to 36 frames), every film, full size, with a Google account.
+  Darkrooms Full: unlimited rolls and Fast mode, US$14.99 once or US$2.99 a month.
+  https://github.com/HNGSeries/Darkrooms-app/releases/latest
+
 If the camera doesn't start (black screen, card light stays on): take the battery out, take the
 card out, and the camera starts normally without it. Tell us (see TESTING.md).
 

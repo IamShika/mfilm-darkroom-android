@@ -17,9 +17,9 @@ on:
   push:
     tags: ["v*"]
     branches: ["main"]
-    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml"]
+    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml", ".github/release-darkrooms-blurb.md"]
   pull_request:
-    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml"]
+    paths: ["ml-dev/**", "VERSION", ".github/workflows/camera.yml", ".github/release-darkrooms-blurb.md"]
 
 permissions:
   contents: write
@@ -228,6 +228,14 @@ jobs:
           pattern: M-Film-*             # the cameras' zips and the tables; not the test-... builds
           path: zips
           merge-multiple: true
+      # Darkrooms in every release's notes. Its words are in their own file, so they can change without
+      # this workflow; a release without them stops here.
+      - name: Darkrooms, for the release notes
+        id: darkrooms
+        run: |
+          f=.github/release-darkrooms-blurb.md
+          [ -s "$f" ] || { echo "$f is missing or empty: every release says where to get Darkrooms"; exit 1; }
+          { echo 'blurb<<END_OF_BLURB'; printf '%s\n' "$(cat "$f")"; echo 'END_OF_BLURB'; } >> "$GITHUB_OUTPUT"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
@@ -245,8 +253,10 @@ jobs:
             on a camera nobody has tried yet. Every zip has the in-camera darkroom. The film OS is a module on
             every camera (ML/modules/filmos.mo, loaded after boot): one zip a camera.
 
+            ${{ steps.darkrooms.outputs.blurb }}
+
             **The films' colour tables** (`M-Film-<version>-tables.zip`): every film's table as the cameras' zips carry them
-            in ML/DARKROOM, with a list of them and their checksums. The desktop darkroom reads the same files,
+            in ML/DARKROOM, with a list of them and their checksums. Darkrooms reads the same files,
             so both give the same colour. You don't need this zip for a camera.
 
             The colour tables of 53 films are adapted from film emulation tables by Pat David, and those of 9 are derived
