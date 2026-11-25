@@ -315,6 +315,8 @@ FOS_INLINE void lut_apply(const uint8_t (*lut)[3], int pr, int pg, int pb, uint8
 #define FAST_BITS   9
 #define DIFF_BITS   11
 #define UNPACK      2688                /* samples decoded at a time: an EOS M slice's row */
+#define RAW_MAX     16384               /* the widest and tallest RAW frame taken (setup_maps) */
+#define RAW_AREA    (64 << 20)          /* and the most samples, 67 million (the 5DS's are 53) */
 
 enum { ST_OPEN, ST_DECODE, ST_KEY, ST_EXPOSE, ST_GLOW, ST_FINISH, ST_JPEG, ST_QUANT, ST_DITHER, ST_BIG, ST_WRITE, ST_DONE, ST_FAIL,
        ST_COUNT };
@@ -546,31 +548,38 @@ static int fail_mem(struct fos_dev *d, int size)
 
 /* ---- reading */
 
-static int read_at(struct fos_dev *d, int offset, void *buf, int size)
+/* The furthest into a file anything is read from. The offsets in a file
+ * are 32 bits, and a damaged one's can be anything: kept below this, an
+ * offset fits an int, and so does one with a few kilobytes added to it
+ * (an IFD's entries, the RAW's header). A CR2 is tens of megabytes. */
+#define FILE_MAX 0x7fff0000u
+
+static int read_at(struct fos_dev *d, unsigned offset, void *buf, int size)
 {
-    if (fos_port_seek(d->f, offset) < 0) return 0;
+    if (offset > FILE_MAX || fos_port_seek(d->f, (int) offset) < 0) return 0;
     return fos_port_read(d->f, buf, size) == size;
 }
 
 
 /* the value of TIFF tag `tag` in the IFD at `ifd` (offset for anything
- * longer than 4 bytes); -1 when absent */
-static long tiff_tag(struct fos_dev *d, unsigned ifd, int tag, int *count)
+ * longer than 4 bytes), and its count; 0 when absent */
+static unsigned tiff_tag(struct fos_dev *d, unsigned ifd, int tag, unsigned *count)
 {
     uint8_t n2[2], e[12];
-    if (!read_at(d, (int) ifd, n2, 2)) return -1;
+    if (!read_at(d, ifd, n2, 2)) return 0;
     int n = u16le(n2);
     for (int i = 0; i < n && i < 400; i++)
     {
-        if (!read_at(d, (int) ifd + 2 + 12 * i, e, 12)) return -1;
+        /* ifd is at most FILE_MAX here (read_at): this doesn't wrap */
+        if (!read_at(d, ifd + 2 + 12 * i, e, 12)) return 0;
         if (u16le(e) != tag) continue;
         int type = u16le(e + 2);
         unsigned cnt = u32le(e + 4);
-        if (count) *count = (int) cnt;
+        if (count) *count = cnt;
         if (type == 3 && cnt <= 2) return u16le(e + 8);
-        return (long) u32le(e + 8);
+        return u32le(e + 8);
     }
-    return -1;
+    return 0;
 }
 
 static int parse_tiff(struct fos_dev *d)
@@ -579,19 +588,19 @@ static int parse_tiff(struct fos_dev *d)
     if (!read_at(d, 0, h, 16)) return fail(d, "can't read the file");
     if (h[0] != 'I' || h[1] != 'I' || h[8] != 'C' || h[9] != 'R') return fail(d, "not a CR2 file");
     unsigned ifd0 = u32le(h + 4), raw_ifd = u32le(h + 12);
-    long o = tiff_tag(d, ifd0, 0x0112, 0);
-    d->orient = o > 0 ? (int) o : 1;
+    unsigned o = tiff_tag(d, ifd0, 0x0112, 0);
+    d->orient = o >= 1 && o <= 8 ? (int) o : 1;
 
     /* the sensor's picture area from the Canon maker note, if it says */
     d->crop_l = -1;
-    long exif = tiff_tag(d, ifd0, 0x8769, 0);
-    long mn = exif > 0 ? tiff_tag(d, (unsigned) exif, 0x927C, 0) : -1;
-    int cnt = 0;
-    long si = mn > 0 ? tiff_tag(d, (unsigned) mn, 0x00E0, &cnt) : -1;
-    if (si > 0 && cnt >= 13)
+    unsigned exif = tiff_tag(d, ifd0, 0x8769, 0);
+    unsigned mn = exif ? tiff_tag(d, exif, 0x927C, 0) : 0;
+    unsigned cnt = 0;
+    unsigned si = mn ? tiff_tag(d, mn, 0x00E0, &cnt) : 0;
+    if (si && cnt >= 13)
     {
         uint8_t s[26];
-        if (read_at(d, (int) si, s, 26))
+        if (read_at(d, si, s, 26))
         {
             d->crop_l = u16le(s + 10); d->crop_t = u16le(s + 12);
             d->crop_w = u16le(s + 14) - d->crop_l + 1; d->crop_h = u16le(s + 16) - d->crop_t + 1;
@@ -606,11 +615,11 @@ static int parse_tiff(struct fos_dev *d)
      * which tells a block laid out some other way from one that is read
      * right; then the frame is developed with the matrix's daylight. */
     d->wb[0] = d->wb[1] = d->wb[2] = 0;
-    long cd = mn > 0 ? tiff_tag(d, (unsigned) mn, 0x4001, &cnt) : -1;
-    if (cd > 0 && cnt >= 67)
+    unsigned cd = mn ? tiff_tag(d, mn, 0x4001, &cnt) : 0;
+    if (cd && cd <= FILE_MAX && cnt >= 67)
     {
         uint8_t w[8];
-        if (read_at(d, (int) cd + 2 * 63, w, 8))
+        if (read_at(d, cd + 2 * 63, w, 8))
         {
             int r = u16le(w), g = u16le(w + 2), g2 = u16le(w + 4), b = u16le(w + 6);
             if (g == g2 && g >= 512 && g <= 4096 && r >= g / 4 && r <= g * 8 && b >= g / 4 && b <= g * 8)
@@ -620,17 +629,19 @@ static int parse_tiff(struct fos_dev *d)
         }
     }
 
-    long off = tiff_tag(d, raw_ifd, 0x0111, 0);
-    if (off <= 0) return fail(d, "no RAW in this file");
+    unsigned off = tiff_tag(d, raw_ifd, 0x0111, 0);
+    if (!off) return fail(d, "no RAW in this file");
+    if (off > FILE_MAX) return fail(d, "can't read the RAW");
     d->file_pos = (int) off;
-    long len = tiff_tag(d, raw_ifd, 0x0117, 0);
-    d->file_end = len > 0 ? (int) (off + len) : 0x7fffffff;
+    /* its length; none, or more than the file can hold: up to the file's end */
+    unsigned len = tiff_tag(d, raw_ifd, 0x0117, 0);
+    d->file_end = (int) (len && len <= FILE_MAX - off ? off + len : FILE_MAX);
     d->slices[0] = 0;
-    long sl = tiff_tag(d, raw_ifd, 0xC640, &cnt);
-    if (sl > 0 && cnt == 3)
+    unsigned sl = tiff_tag(d, raw_ifd, 0xC640, &cnt);
+    if (sl && cnt == 3)
     {
         uint8_t s[6];
-        if (read_at(d, (int) sl, s, 6))
+        if (read_at(d, sl, s, 6))
         {
             d->slices[0] = u16le(s); d->slices[1] = u16le(s + 2); d->slices[2] = u16le(s + 4);
         }
@@ -644,8 +655,8 @@ static int parse_tiff(struct fos_dev *d)
 static int build_huff(struct huff *h, const uint8_t *counts, const uint8_t *vals, int nvals)
 {
     memset(h, 0, sizeof(*h));
-    /* more values than vals[] holds, or a size no difference has */
-    if (nvals > 256) return 0;
+    /* no codes at all, more values than vals[] holds, or a size no difference has */
+    if (nvals < 1 || nvals > 256) return 0;
     for (int i = 0; i < nvals; i++)
         if (vals[i] > 16) return 0;
     memcpy(h->vals, vals, nvals);
@@ -702,7 +713,7 @@ static int parse_ljpeg_in(struct fos_dev *d, uint8_t *hdr, int size)
     int n = d->file_end - d->file_pos < size ? d->file_end - d->file_pos : size;
     if (n < 64 || !read_at(d, d->file_pos, hdr, n)) return fail(d, "can't read the RAW");
     if (hdr[0] != 0xFF || hdr[1] != 0xD8) return fail(d, "the RAW is not a lossless JPEG");
-    int p = 2, have_sof = 0, ntab = 0;
+    int p = 2, have_sof = 0, ntab = 0, defined = 0;
     while (p + 4 <= n)
     {
         if (hdr[p] != 0xFF) return fail(d, "broken RAW header");
@@ -735,6 +746,7 @@ static int parse_ljpeg_in(struct fos_dev *d, uint8_t *hdr, int size)
                 for (int i = 0; i < 16; i++) total += q[i];
                 if (end - q < 16 + total || !build_huff(&d->tables[id], q, q + 16, total))
                     return fail(d, "bad Huffman table");
+                defined |= 1 << id;
                 if (id + 1 > ntab) ntab = id + 1;
                 q += 16 + total;
             }
@@ -752,14 +764,20 @@ static int parse_ljpeg_in(struct fos_dev *d, uint8_t *hdr, int size)
             d->bits -= s[3 + s[0] * 2] & 15;
             d->file_pos += p + 2 + len;
             if (!have_sof || !ntab) return fail(d, "RAW header incomplete");
-            /* LibRaw's rule, which Canon follows: component c takes table c,
-             * or the last one defined */
-            for (int c = 0; c < 4; c++) d->huff[c] = &d->tables[c < ntab ? c : ntab - 1];
+            if (d->clrs < 1 || d->clrs > 4 || d->bits < 8 || d->bits > 16) return fail(d, "unsupported RAW layout");
+            if (d->psv != 1) return fail(d, "unsupported RAW predictor");
+            /* Component c takes table c, or the last one when there are
+             * fewer. Where the file skips a number (tables 0 and 2, not 1)
+             * LibRaw gives it the table below; here it fails, as damage. */
+            for (int c = 0; c < 4; c++)
+            {
+                int t = c < ntab ? c : ntab - 1;
+                if (c < d->clrs && !(defined >> t & 1)) return fail(d, "bad Huffman table");
+                d->huff[c] = &d->tables[t];
+            }
             /* the same table twice (the EOS M's): one copy, half the cache */
             for (int c = 1; c < 4; c++)
                 if (d->huff[c] != d->huff[0] && !memcmp(d->huff[c], d->huff[0], sizeof(struct huff))) d->huff[c] = d->huff[0];
-            if (d->clrs < 1 || d->clrs > 4 || d->bits < 8 || d->bits > 16) return fail(d, "unsupported RAW layout");
-            if (d->psv != 1) return fail(d, "unsupported RAW predictor");
             return 1;
         }
         p += 2 + len;
@@ -803,9 +821,19 @@ static int setup_maps(struct fos_dev *d)
         d->raw_w /= 2;
         d->raw_h *= 2;
     }
-    if (d->slices[0] && d->slices[0] * d->slices[1] + d->slices[2] != d->raw_w)
+    /* No sensor is smaller, or bigger (the 5DS's is 8896 x 5920): a damaged
+     * header's size can be anything, the maps below keep columns and rows in
+     * 16 bits, and a frame of more samples than any sensor's would only keep
+     * the camera decoding for minutes (the sides first: the product fits) */
+    if (d->raw_w < 64 || d->raw_h < 64 || d->raw_w > RAW_MAX || d->raw_h > RAW_MAX || d->raw_w * d->raw_h > RAW_AREA)
+        return fail(d, "unsupported RAW size");
+    /* the slices as wide as the frame (a slice no wider than it first, so
+     * the sum can't overflow); and none of no width, which the decoder
+     * would go round forever */
+    if (d->slices[0] && (d->slices[1] > d->raw_w || d->slices[0] * d->slices[1] + d->slices[2] != d->raw_w))
         return fail(d, "RAW slices don't add up");
-    if (d->crop_l < 0 || d->crop_l + d->crop_w > d->raw_w || d->crop_t + d->crop_h > d->raw_h || d->crop_w < 64)
+    if (d->slices[0] && !d->slices[1]) return fail(d, "RAW slices of width 0");
+    if (d->crop_l < 0 || d->crop_l + d->crop_w > d->raw_w || d->crop_t + d->crop_h > d->raw_h || d->crop_w < 64 || d->crop_h < 64)
     {
         /* no sensor info: the EOS M's picture area, scaled to this sensor */
         d->crop_l = d->raw_w * 84 / 5280; d->crop_t = d->raw_h * 64 / 3528;
@@ -1113,6 +1141,9 @@ static __attribute__((noinline)) void fill(struct fos_dev *d)
         if (be - bp < 2)
         {
             int len = refill(d, bp, (int) (be - bp));
+            /* a single byte, the RAW's last: the zeros after it too, or a
+             * 0xFF there has no next byte in the buffer to look at */
+            if (len < 2) len = refill(d, d->buf, len);
             bp = d->buf; be = bp + len;
             ff = 0;
         }
@@ -1539,6 +1570,10 @@ static void decode(struct fos_dev *d, long n)
     {
         /* to the end of a raw row, so scatter has it whole */
         int k = d->sw - d->sx;
+        /* setup_maps lets through no slice of no width but a last one, which
+         * comes only once every sample is in; were one to come sooner, the
+         * frame fails here rather than the camera going round forever */
+        if (k <= 0) { fail(d, "RAW slices don't add up"); return; }
         if (k > UNPACK) k = UNPACK;
         if (k > d->total - d->done) k = (int) (d->total - d->done);
         unpack(d, s, k);
@@ -1555,7 +1590,7 @@ static void decode(struct fos_dev *d, long n)
 /* 65536 / n for the samples a print pixel's channel got. A portrait print
  * pixel takes about 12 x 12 raw samples on a full-frame sensor (5D Mark III,
  * 6D, 5D Mark II), so green gets up to 98 of them: with room for only 63
- * here green came out black and the print purple. (sums <= 16383 n, and
+ * here green came out black and the print purple. (sums <= 65535 n, and
  * 65536 / n of them still fits 32 bits for any n.) */
 #define NMAX 256
 static uint32_t recip[NMAX];
@@ -1574,7 +1609,7 @@ FOS_INLINE void pixel_linear(const struct fos_dev *d, int x, int y, int lin[3])
     int cam[3];
     for (int c = 0; c < 3; c++)
     {
-        /* the mean (sums <= 16383 n, so this fits), less black, balanced */
+        /* the mean (sums <= 65535 n, so this fits), less black, balanced */
         int m = n[c] < NMAX ? (int) (d->sums[3 * i + c] * recip[n[c]] >> 12) - d->black16 : 0;
         int v = m > 0 ? (int) (((int64_t) m * d->pre[c]) >> 14) : 0;
         cam[c] = v < 0 ? 0 : v > d->clip ? d->clip : v;
@@ -2176,10 +2211,15 @@ static __attribute__((noinline)) void expose_cam(const struct fos_dev *d, const 
     {
         int n0 = a * *ra, n1 = a * *rb + b * *ra, n2 = b * *rb;
         int c0 = 0, c1 = 0, c2 = 0;
-        /* (sums <= 16383 n, so this fits) */
-        if (n0 < NMAX) { int m = (int) (sm[0] * recip[n0] >> 12) - black; if (m > 0) { c0 = (m * p0) >> 14; if (c0 > clip) c0 = clip; } }
-        if (n1 < NMAX) { int m = (int) (sm[1] * recip[n1] >> 12) - black; if (m > 0) { c1 = (m * p1) >> 14; if (c1 > clip) c1 = clip; } }
-        if (n2 < NMAX) { int m = (int) (sm[2] * recip[n2] >> 12) - black; if (m > 0) { c2 = (m * p2) >> 14; if (c2 > clip) c2 = clip; } }
+        /* (sums <= 65535 n, so the mean fits; times the balance, in 64 bits
+         * as pixel_linear has it: a damaged RAW's samples can wrap round all
+         * 16 of their bits, and its white balance be up to 8 times green.
+         * On the camera that costs 6 instructions a pixel, of 60; a 32-bit
+         * way, the mean held under where the product passes the clip, cost
+         * 14, as it needs three more registers than the loop has.) */
+        if (n0 < NMAX) { int m = (int) (sm[0] * recip[n0] >> 12) - black; if (m > 0) { c0 = (int) (((int64_t) m * p0) >> 14); if (c0 > clip) c0 = clip; } }
+        if (n1 < NMAX) { int m = (int) (sm[1] * recip[n1] >> 12) - black; if (m > 0) { c1 = (int) (((int64_t) m * p1) >> 14); if (c1 > clip) c1 = clip; } }
+        if (n2 < NMAX) { int m = (int) (sm[2] * recip[n2] >> 12) - black; if (m > 0) { c2 = (int) (((int64_t) m * p2) >> 14); if (c2 > clip) c2 = clip; } }
         cam[0] = (uint16_t) c0; cam[1] = (uint16_t) c1; cam[2] = (uint16_t) c2;
     }
 }
