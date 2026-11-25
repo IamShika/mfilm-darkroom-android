@@ -1,8 +1,9 @@
 // install.html, step 5: "Install onto the card from this page". In Chrome, Edge and Opera on a computer the
 // page downloads the camera's zip from mfilm.app (dl/, published by pages.yml: GitHub's own downloads
 // can't be fetched by a page), checks its SHA-256, unzips it and writes it onto the card the visitor
-// picks (the File System Access API). Everywhere else the box stays hidden and the steps by hand are
-// the way. What was tried before this was written, and why it is done this way: docs/easy-install.md.
+// picks (the File System Access API). Everywhere else, and for the EOS M2, the box stays hidden and the
+// steps by hand are the way. What was tried before this was written, and why it is done this way:
+// docs/easy-install.md.
 
 import { T, addStrings } from './i18n.js';
 
@@ -95,10 +96,10 @@ function update() {
   go.disabled = busy || !card;
 }
 
-// the camera picked at the top of the page changed, or the language did
+// the camera picked at the top of the page changed (null: to one the box isn't for), or the language did
 export async function easyCamera(c) {
   await listed;
-  if (camera && c && camera.platform !== c.platform) { card = null; say(null); }
+  if (camera && (!c || camera.platform !== c.platform)) { card = null; say(null); }
   camera = c;
   const show = !!zip();
   box.hidden = !show;
