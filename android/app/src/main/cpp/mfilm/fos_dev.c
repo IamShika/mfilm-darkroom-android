@@ -318,8 +318,8 @@ FOS_INLINE void lut_apply(const uint8_t (*lut)[3], int pr, int pg, int pb, uint8
 #define RAW_MAX     16384               /* the widest and tallest RAW frame taken (setup_maps) */
 #define RAW_AREA    (64 << 20)          /* and the most samples, 67 million (the 5DS's are 53) */
 
-enum { ST_OPEN, ST_DECODE, ST_KEY, ST_EXPOSE, ST_GLOW, ST_FINISH, ST_JPEG, ST_QUANT, ST_DITHER, ST_BIG, ST_WRITE, ST_DONE, ST_FAIL,
-       ST_COUNT };
+enum { ST_OPEN, ST_DECODE, ST_IMAGE, ST_KEY, ST_EXPOSE, ST_GLOW, ST_FINISH, ST_BLOOM, ST_JPEG, ST_QUANT, ST_DITHER, ST_BIG,
+       ST_WRITE, ST_DONE, ST_FAIL, ST_COUNT };
 
 #define BIG_BANDS   64                  /* a big print's sums are kept in pieces of a megabyte */
 #define BIG_ROWS    16                  /* its rows finished at a time: a row of JPEG blocks */
@@ -436,6 +436,18 @@ struct fos_dev
     struct fos_jpeg *bjpeg;
     void *bzoom;
     int bfail;                          /* 1: the JPEG couldn't all be written */
+
+    /* a picture that is not a CR2 (fos_dev_start_image): sRGB pixels, and
+     * where the picture sits on the screen's print */
+    int image;
+    const uint8_t *picture;
+    int pic_w, pic_h;
+    int px0, pw, py0, ph;
+
+    /* the phone's knobs (fos_dev_adjust) */
+    int shadows, bloom_style, bloom_amount, bloom_range, bloom_spread, bloom_warmth;
+    uint16_t *bloom;                    /* the glow, GW x GH, 1/256 of a level */
+    int bloom_tint[3], bloom_gain;      /* its colour and strength (1/256) */
 
     /* the date in the corner (fos_dev_stamp): its mask at the screen's size and at the big print's */
     int stamp;
@@ -2009,6 +2021,34 @@ void fos_dev_stamp(struct fos_dev *d, int on)
     if (d) d->stamp = on;
 }
 
+struct fos_dev *fos_dev_start_image(const uint8_t *rgb, int pic_w, int pic_h,
+                                    const char *print, int film, int frame,
+                                    const char *when, const char *fstop)
+{
+    if (!rgb || pic_w < 1 || pic_h < 1) return 0;
+    struct fos_dev *d = fos_dev_start("", print, film, frame, when, fstop);
+    if (!d) return 0;
+    d->image = 1;
+    d->picture = rgb;
+    d->pic_w = pic_w;
+    d->pic_h = pic_h;
+    return d;
+}
+
+void fos_dev_adjust(struct fos_dev *d, int shadows, int style, int amount, int range,
+                    int spread, int warmth)
+{
+    if (!d) return;
+    d->shadows = fos_clamp(shadows, 0, 100);
+    d->bloom_style = fos_clamp(style, 0, FOS_BLOOM_COUNT - 1);
+    d->bloom_amount = fos_clamp(amount, 0, 100);
+    d->bloom_range = fos_clamp(range, 0, 100);
+    d->bloom_spread = fos_clamp(spread, 0, 100);
+    d->bloom_warmth = fos_clamp(warmth, -100, 100);
+    /* a glow of nothing is no glow */
+    if (!d->bloom_amount) d->bloom_style = FOS_BLOOM_OFF;
+}
+
 int fos_dev_made(const struct fos_dev *d, int *w, int *h)
 {
     int pw = d && d->rows_axis_x ? d->ow : FOS_PRINT_W;
@@ -2028,6 +2068,7 @@ void fos_dev_free(struct fos_dev *d)
     fos_port_free(d->seg_x0); fos_port_free(d->seg_off); fos_port_free(d->seg_desc); fos_port_free(d->desc_off); fos_port_free(d->seg_piece);
     fos_port_free(d->rowob); fos_port_free(d->colob); fos_port_free(d->ne_r); fos_port_free(d->ne_c);
     fos_port_free(d->sums); fos_port_free(d->glow); fos_port_free(d->rgb); fos_port_free(d->whist);
+    fos_port_free(d->bloom);
     fos_port_free(d->hist); fos_port_free(d->inv); fos_port_free(d->err_rows); fos_port_free(d->idx);
     /* stopped in the middle of the big print: what there is of its files is closed */
     if (d->bjpeg) fos_jpeg_end(d->bjpeg);
@@ -2054,8 +2095,8 @@ int fos_dev_doing(const struct fos_dev *d)
     {
         case ST_OPEN: return FOS_DEV_MIXING;
         case ST_DECODE: return lut_film == d->film && lut_built >= NGRID ? FOS_DEV_DEVELOPING : FOS_DEV_MIXING;
-        case ST_KEY: case ST_EXPOSE: case ST_GLOW: case ST_FINISH: return FOS_DEV_FIXING;
-        case ST_JPEG: case ST_QUANT: case ST_DITHER: case ST_WRITE: return FOS_DEV_DRYING;
+        case ST_IMAGE: case ST_KEY: case ST_EXPOSE: case ST_GLOW: case ST_FINISH: return FOS_DEV_FIXING;
+        case ST_BLOOM: case ST_JPEG: case ST_QUANT: case ST_DITHER: case ST_WRITE: return FOS_DEV_DRYING;
         case ST_BIG: return FOS_DEV_ENLARGING;
         case ST_DONE: return FOS_DEV_DONE;
     }
@@ -2081,10 +2122,12 @@ static int progress_small(const struct fos_dev *d)
     {
         case ST_OPEN: return 0;
         case ST_DECODE: return d->total ? (int) ((int64_t) d->done * 800 / d->total) : 0;   /* 64 bits: long is 32 on the camera */
+        case ST_IMAGE: return d->image ? 800 + d->row * 60 / H : 800;
         case ST_KEY: return 800;
         case ST_EXPOSE: return 805 + d->row * 60 / H;
         case ST_GLOW: return 865;
         case ST_FINISH: return 870 + d->row * 64 / H;
+        case ST_BLOOM: return 934;
         case ST_JPEG: return 934;
         case ST_QUANT: return 940;
         case ST_DITHER: return 950 + d->row * 45 / H;
@@ -2820,6 +2863,470 @@ void fos_dev_test_grain(uint8_t *o, int w, int h, int c, int grain, int mono, in
 }
 #endif
 
+/* ---------------------------------------------------------------- the phone's knobs
+ *
+ * Lightroom's Glow panel in the engine's own terms: the light above Range is
+ * gathered, spread by Spread, coloured by the style, and laid back over the
+ * print by Amount. The styles:
+ *
+ *   bloom       a soft even haze about the highlights
+ *   diffusion   a wider, paler veil
+ *   halation    a tight red-orange halo, as film takes from its backing
+ *   motion      smeared along the frame
+ *   streak      smeared far along it, as an anamorphic lens does
+ *
+ * Shadows lifts the dark end of the finished print: some frames come out
+ * darker than the phone's screen showed them. All of it is off at 0, so the
+ * camera's own prints are untouched.
+ */
+
+/* the darks lifted by s (0..100), the highlights left alone */
+static void shadow_row(uint8_t *o, int n, int s)
+{
+    for (uint8_t *e = o + 3 * n; o < e; o += 3)
+        for (int c = 0; c < 3; c++)
+        {
+            int v = o[c], t = 255 - v;
+            v += (int) ((long) s * 60 * t * t / 6502500);     /* 60 levels at 100/100 */
+            o[c] = (uint8_t) (v > 255 ? 255 : v);
+        }
+}
+
+/* the glow's colour, how far it reaches, and whether it runs across the frame only */
+static void bloom_tint(int style, int warmth, int tint[3], int *reach, int *across, int *strength)
+{
+    switch (style)
+    {
+        case FOS_BLOOM_DIFFUSION:  tint[0] = 255; tint[1] = 253; tint[2] = 248; *reach = 150; *across = 0; *strength = 240; break;
+        case FOS_BLOOM_HALATION:   tint[0] = 255; tint[1] = 96;  tint[2] = 58;  *reach = 60;  *across = 0; *strength = 240; break;
+        case FOS_BLOOM_MOTION:     tint[0] = 252; tint[1] = 250; tint[2] = 246; *reach = 110; *across = 1; *strength = 180; break;
+        case FOS_BLOOM_STREAK:     tint[0] = 255; tint[1] = 244; tint[2] = 226; *reach = 180; *across = 1; *strength = 140; break;
+        default:                   tint[0] = 255; tint[1] = 247; tint[2] = 238; *reach = 120; *across = 0; *strength = 250; break;
+    }
+    /* warmth, -100 blue .. 100 amber */
+    tint[0] += warmth * 45 / 100;
+    tint[2] -= warmth * 60 / 100;
+    for (int c = 0; c < 3; c++)
+    {
+        if (tint[c] < 0) tint[c] = 0;
+        if (tint[c] > 255) tint[c] = 255;
+    }
+}
+
+/* a [1 2 1] pass each way over a plane of the glow's grid, in 1/16 of a
+ * level (so the spreading of a dim glow, 60 passes of it, doesn't round away
+ * to nothing); stride taps further out, for the long smear of a streak */
+static void bloom_blur(uint16_t *p, int w, int h, int passes, int across, int down, int stride)
+{
+    int tmp[GW > GH ? GW : GH];
+    for (int pass = 0; pass < passes; pass++)
+    {
+        if (across)
+            for (int y = 0; y < h; y++)
+            {
+                uint16_t *r = p + y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    int a = x >= stride ? x - stride : 0, b = x + stride < w ? x + stride : w - 1;
+                    tmp[x] = (r[a] + 2 * r[x] + r[b] + 2) >> 2;
+                }
+                for (int x = 0; x < w; x++) r[x] = (uint16_t) tmp[x];
+            }
+        if (down)
+            for (int x = 0; x < w; x++)
+            {
+                for (int y = 0; y < h; y++)
+                {
+                    int a = y >= stride ? y - stride : 0, b = y + stride < h ? y + stride : h - 1;
+                    tmp[y] = (p[a * w + x] + 2 * p[y * w + x] + p[b * w + x] + 2) >> 2;
+                }
+                for (int y = 0; y < h; y++) p[y * w + x] = (uint16_t) tmp[y];
+            }
+    }
+}
+
+/* a box blur across the plane: the long smear a lens makes of a highlight,
+ * which a glow's [1 2 1] passes would take a hundred of to reach */
+static void bloom_box(uint16_t *p, int w, int h, int radius)
+{
+    uint32_t run[GW + 1];
+    int tmp[GW];
+    if (radius < 1) radius = 1;
+    if (radius > w / 2) radius = w / 2;
+    for (int y = 0; y < h; y++)
+    {
+        uint16_t *r = p + y * w;
+        run[0] = 0;
+        for (int x = 0; x < w; x++) run[x + 1] = run[x] + r[x];
+        for (int x = 0; x < w; x++)
+        {
+            int a = x - radius < 0 ? 0 : x - radius;
+            int b = x + radius + 1 > w ? w : x + radius + 1;
+            tmp[x] = (int) ((long) (run[b] - run[a]) * 256 / (b - a));
+        }
+        for (int x = 0; x < w; x++) r[x] = (uint16_t) tmp[x];
+    }
+}
+
+/* the finished print's highlights into the grid, spread: 0 when there is no
+ * memory for it (the print is then left as it is) */
+static int bloom_build(struct fos_dev *d)
+{
+    const int W = FOS_PRINT_W;
+    int32_t *acc = fos_port_alloc(GW * GH * 4);
+    fos_port_free(d->bloom);
+    d->bloom = fos_port_alloc(GW * GH * 2);
+    if (!acc || !d->bloom) { fos_port_free(acc); fos_port_free(d->bloom); d->bloom = 0; return 0; }
+    memset(acc, 0, GW * GH * 4);
+    int tint[3], reach, across, strength;
+    bloom_tint(d->bloom_style, d->bloom_warmth, tint, &reach, &across, &strength);
+    for (int c = 0; c < 3; c++) d->bloom_tint[c] = tint[c];
+    d->bloom_gain = d->bloom_amount * strength * 256 / 10000;
+    /* Range picks where the glow is gathered from: 0 only the brightest,
+     * 100 down into the mid tones. A smear across the frame is a lens's, and
+     * only the frame's own bright points start one */
+    int thr = 235 - d->bloom_range * 140 / 100;
+    if (across && thr < 190) thr = 190;
+    for (int y = 0; y < FOS_PRINT_H; y++)
+    {
+        const uint8_t *p = d->rgb + 3 * y * W;
+        int32_t *row = acc + (y >> 2) * GW;
+        for (int x = 0; x < W; x++, p += 3)
+        {
+            int l = (p[0] * 54 + p[1] * 183 + p[2] * 19) >> 8;
+            int e = l - thr;
+            if (e > 0) row[x >> 2] += e;
+        }
+    }
+    for (int i = 0; i < GW * GH; i++)
+    {
+        /* the cell's mean, in 1/256 of a level: acc[i] is 16 pixels of it, so
+         * * 16, and a single bright pixel is not rounded away */
+        long v = (long) acc[i] * 16;
+        d->bloom[i] = (uint16_t) (v > 65280 ? 65280 : v);
+    }
+    fos_port_free(acc);
+
+    int passes = reach * d->bloom_spread / 100 + 2;
+    if (across)
+    {
+        /* motion and streak run along the frame only, a streak much further */
+        int radius = d->bloom_style == FOS_BLOOM_STREAK ? 12 + d->bloom_spread
+                                                        : 3 + d->bloom_spread / 6;
+        bloom_box(d->bloom, GW, GH, radius);
+        bloom_blur(d->bloom, GW, GH, 2, 0, 1, 1);       /* soft above and below it */
+    }
+    else bloom_blur(d->bloom, GW, GH, passes, 1, 1, 1);
+    /* Spreading light thins it: bring the glow back to the strength of what
+     * it was gathered from (up to four times; a dim highlight stays dim),
+     * so Amount 100 is a strong glow and 25 a faint one */
+    int peak = 0, cap = across ? 8 : 4;
+    for (int i = 0; i < GW * GH; i++) if (d->bloom[i] > peak) peak = d->bloom[i];
+    if (peak > 0)
+    {
+        int k = 255 * 256 * 256 / peak;
+        if (k > cap * 256) k = cap * 256;
+        for (int i = 0; i < GW * GH; i++)
+        {
+            int t = (int) d->bloom[i] * k >> 8;
+            d->bloom[i] = (uint16_t) (t > 65280 ? 65280 : t);
+        }
+    }
+#ifdef FOS_DEV_TEST
+    if (getenv("FOS_BLOOM_DEBUG"))
+        fprintf(stderr, "bloom: style %d, %d passes, tint %d %d %d, gain %d, peak %d\n",
+                d->bloom_style, passes, tint[0], tint[1], tint[2], d->bloom_gain, peak);
+#endif
+    return 1;
+}
+
+/* a level with the glow laid over it, an additive light screened in: the
+ * print takes the glow without burning out where it is already bright */
+static int bloom_over(int v, int add)
+{
+    return 255 - (255 - v) * (255 - add) / 255;
+}
+
+/* the glow at a place on the screen's print, 0..255 a colour */
+static void bloom_at(const struct fos_dev *d, float x, float y, int out[3])
+{
+    float fx = x * 0.25f - 0.5f, fy = y * 0.25f - 0.5f;
+    int x0 = (int) fx, y0 = (int) fy;
+    if (fx < (float) x0) x0--;
+    if (fy < (float) y0) y0--;
+    int tx = (int) ((fx - x0) * 256), ty = (int) ((fy - y0) * 256);
+    if (tx < 0) tx = 0; else if (tx > 256) tx = 256;
+    if (ty < 0) ty = 0; else if (ty > 256) ty = 256;
+    int cx0 = x0 < 0 ? 0 : x0 >= GW ? GW - 1 : x0, cx1 = x0 + 1 < 0 ? 0 : x0 + 1 >= GW ? GW - 1 : x0 + 1;
+    int cy0 = y0 < 0 ? 0 : y0 >= GH ? GH - 1 : y0, cy1 = y0 + 1 < 0 ? 0 : y0 + 1 >= GH ? GH - 1 : y0 + 1;
+    int a = d->bloom[cy0 * GW + cx0], b = d->bloom[cy0 * GW + cx1];
+    int c = d->bloom[cy1 * GW + cx0], e = d->bloom[cy1 * GW + cx1];
+    int top = a + ((b - a) * tx >> 8), bot = c + ((e - c) * tx >> 8);
+    int v = (top + ((bot - top) * ty >> 8) + 128) >> 8;    /* 1/256 of a level to a level */
+    v = v * d->bloom_gain >> 8;
+    for (int k = 0; k < 3; k++)
+    {
+        int a = v * d->bloom_tint[k] / 255;
+        out[k] = a > 255 ? 255 : a;
+    }
+}
+
+/* rows y0..y1-1 of the screen's print, the glow laid over them */
+static void bloom_apply_rows(struct fos_dev *d, int y0, int y1)
+{
+    const int W = FOS_PRINT_W;
+    for (int y = y0; y < y1; y++)
+    {
+        if (y < d->py0 || y >= d->py0 + d->ph) continue;
+        uint8_t *p = d->rgb + 3 * (y * W + d->px0);
+        for (int x = 0; x < d->pw; x++, p += 3)
+        {
+            int add[3];
+            bloom_at(d, (float) (d->px0 + x), (float) y, add);
+            for (int c = 0; c < 3; c++) p[c] = (uint8_t) bloom_over(p[c], add[c]);
+        }
+    }
+}
+
+/* row y of a big print n pixels wide: the glow, taken from where that row
+ * lies on the screen's print */
+static void bloom_row(const struct fos_dev *d, uint8_t *rgb, int n, int y, int bw, int bh)
+{
+    if (!d->bloom) return;
+    const float sx = d->image ? (float) d->px0 : d->rows_axis_x ? (float) d->ox0 : 0;
+    const float sw = d->image ? (float) d->pw : d->rows_axis_x ? (float) d->ow : (float) FOS_PRINT_W;
+    const float sy = d->image ? (float) d->py0 : 0;
+    const float sh = d->image ? (float) d->ph : (float) FOS_PRINT_H;
+    for (int x = 0; x < n; x++, rgb += 3)
+    {
+        int add[3];
+        bloom_at(d, sx + (x + 0.5f) * sw / bw, sy + (y + 0.5f) * sh / bh, add);
+        for (int c = 0; c < 3; c++) rgb[c] = (uint8_t) bloom_over(rgb[c], add[c]);
+    }
+}
+
+/* ---------------------------------------------------------------- a picture from outside */
+
+/* sRGB 0..255 to linear light, 4096 = 1.0 (as a RAW's samples come out of
+ * expose_lin), so the film's table reads a picture as it reads a frame */
+static uint16_t srgb_lin[256];
+static int srgb_ready;
+
+static const uint16_t *srgb_table(void)
+{
+    if (!srgb_ready)
+    {
+        for (int i = 0; i < 256; i++)
+        {
+            float v = i / 255.0f;
+            v = v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f);
+            srgb_lin[i] = (uint16_t) (v * 4096.0f + 0.5f);
+        }
+        srgb_ready = 1;
+    }
+    return srgb_lin;
+}
+
+/* the picture's pixels a print pixel of a pw x ph print covers, averaged */
+static void picture_pixel(const struct fos_dev *d, int px, int py, int pw, int ph, uint16_t out[3])
+{
+    const uint16_t *srgb = srgb_table();
+    int x0 = (int) ((long) px * d->pic_w / pw), x1 = (int) ((long) (px + 1) * d->pic_w / pw);
+    int y0 = (int) ((long) py * d->pic_h / ph), y1 = (int) ((long) (py + 1) * d->pic_h / ph);
+    if (x1 <= x0) x1 = x0 + 1;
+    if (y1 <= y0) y1 = y0 + 1;
+    if (x1 > d->pic_w) x1 = d->pic_w;
+    if (y1 > d->pic_h) y1 = d->pic_h;
+    long r = 0, g = 0, b = 0;
+    int n = (x1 - x0) * (y1 - y0);
+    for (int y = y0; y < y1; y++)
+    {
+        const uint8_t *p = d->picture + 3 * ((long) y * d->pic_w + x0);
+        for (int x = x0; x < x1; x++, p += 3) { r += p[0]; g += p[1]; b += p[2]; }
+    }
+    out[0] = srgb[(int) ((r + n / 2) / n)];
+    out[1] = srgb[(int) ((g + n / 2) / n)];
+    out[2] = srgb[(int) ((b + n / 2) / n)];
+}
+
+/* the picture's print rows, in place of the RAW's: a box average of the
+ * pixels each print pixel covers, and the highlights into the glow grid */
+static __attribute__((noinline)) void image_rows(struct fos_dev *d, int y0, int y1)
+{
+    const int W = FOS_PRINT_W;
+    const uint16_t *srgb = srgb_table();
+    const int thr = (int) (d->look->hal_thr * 4096);
+    for (int y = y0; y < y1; y++)
+    {
+        uint16_t *lin = d->lin + 3 * y * W;
+        int32_t *g = d->glow ? d->glow + (y >> 2) * GW : 0;
+        if (y < d->py0 || y >= d->py0 + d->ph) continue;
+        int sy0 = (int) ((long) (y - d->py0) * d->pic_h / d->ph);
+        int sy1 = (int) ((long) (y - d->py0 + 1) * d->pic_h / d->ph);
+        if (sy1 <= sy0) sy1 = sy0 + 1;
+        if (sy1 > d->pic_h) sy1 = d->pic_h;
+        for (int i = 0; i < d->pw; i++)
+        {
+            int sx0 = (int) ((long) i * d->pic_w / d->pw);
+            int sx1 = (int) ((long) (i + 1) * d->pic_w / d->pw);
+            if (sx1 <= sx0) sx1 = sx0 + 1;
+            if (sx1 > d->pic_w) sx1 = d->pic_w;
+            long r = 0, gg = 0, b = 0;
+            int n = (sx1 - sx0) * (sy1 - sy0);
+            for (int sy = sy0; sy < sy1; sy++)
+            {
+                const uint8_t *p = d->picture + 3 * ((long) sy * d->pic_w + sx0);
+                for (int sx = sx0; sx < sx1; sx++, p += 3) { r += p[0]; gg += p[1]; b += p[2]; }
+            }
+            uint16_t *o = lin + 3 * (d->px0 + i);
+            o[0] = srgb[(int) ((r + n / 2) / n)];
+            o[1] = srgb[(int) ((gg + n / 2) / n)];
+            o[2] = srgb[(int) ((b + n / 2) / n)];
+            if (g)
+            {
+                int l = (871 * o[0] + 2929 * o[1] + 296 * o[2]) >> 12;
+                if (l > thr) g[(d->px0 + i) >> 2] += l - thr;
+            }
+        }
+    }
+}
+
+/* row y of the screen's print from the picture: the vignette, the film's
+ * table, the grain, and the knobs -- as stage_finish does a RAW's */
+static __attribute__((noinline)) void stage_finish_image(struct fos_dev *d, int y)
+{
+    const int W = FOS_PRINT_W, H = FOS_PRINT_H;
+    const struct fos_look *L = d->look;
+    if (y == 0)
+    {
+        for (int x = 0; x < d->pw; x++) { float t = 2.0f * x / (d->pw - 1) - 1; d->vig_x[x] = (int16_t) (0.06f * t * t * 4096); }
+        for (int k = 0; k < H; k++) { float t = 2.0f * k / (H - 1) - 1; d->vig_y[k] = (int16_t) (0.06f * t * t * 4096); }
+        for (int x = 0; x < W; x++) glow_pos(x, GW, &d->gx[x], &d->fx[x]);
+    }
+    if (y < d->py0 || y >= d->py0 + d->ph) return;      /* the print's bars stay black */
+    uint8_t *o = d->rgb + 3 * y * W;
+    int hal[3];
+    for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
+    int32_t grow[GW];
+    if (d->glow)
+    {
+        uint8_t gy, fy;
+        glow_pos(y, GH, &gy, &fy);
+        const int32_t *g0 = d->glow + gy * GW, *g1 = g0 + GW;
+        for (int j = 0; j < GW; j++) grow[j] = g0[j] * (8 - fy) + g1[j] * fy;
+    }
+    finish_pos(d->lin + 3 * (y * W + d->px0), d->pos, d->pw, 4096 - d->vig_y[y], d->vig_x,
+               d->glow ? grow : 0, d->gx + d->px0, d->fx + d->px0, hal, (int) (L->hal_thr * 4096));
+    finish_lut(d->pos, o + 3 * d->px0, d->pw);
+    if (d->shadows) shadow_row(o + 3 * d->px0, d->pw, d->shadows);
+    int c = grain_clump(L, d->pw, grain_ref(d)), q3, q2, q1, q0;
+    grain_taps(c, &q3, &q2, &q1, &q0);
+    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    if (grain) finish_grain(o + 3 * d->px0, d->pw, d->seed, grain, L->mono, d->px0, y, q3, q2, q1, q0);
+}
+
+/* the picture printed bigger: its size from the picture, its rows from
+ * picture_pixel, the rest as big_finish does a RAW's */
+static int big_setup_image(struct fos_dev *d, int size)
+{
+    const int f = size == FOS_SIZE_L ? 2 : 3;
+    int bw = d->pic_w / f, bh = d->pic_h / f;
+    if (bw < d->pw) bw = d->pw;
+    if (bh < d->ph) bh = d->ph;
+    if (bw > RAW_MAX || bh > RAW_MAX || (long) bw * bh > RAW_AREA) return 0;
+    const int n_rgb = BIG_ROWS * bw * 3, n_idx = BIG_ROWS * bw, n_err = (bw + 2) * 3 * 2 * 2;
+    const int n_vig = bw * 2 * 2, n_g = bw * 2, n_lin = bw * 3 * 2 * 2;
+    const int total = n_rgb + n_idx + n_err + n_vig + n_g + n_lin;
+    uint8_t *a = d->barena = fos_port_alloc(total);
+    if (!a) return 0;
+    d->brgb = a; a += n_rgb;
+    d->bidx = a; a += n_idx;
+    d->berr = (int16_t *) a; a += n_err;
+    d->bvig_x = (int16_t *) a; a += n_vig;
+    d->bgx = a; a += n_g;
+    d->blin = (uint16_t *) a;
+    d->brow = 0;
+    d->bvig_y = d->bvig_x + bw;
+    d->bfx = d->bgx + bw;
+    d->bcam = d->blin + bw * 3;         /* where a row's places on the table go */
+    memset(d->berr, 0, n_err);
+    d->bw = bw; d->bh = bh;
+    d->big = f; d->bshift = 0; d->bsize = size;
+    return 1;
+}
+
+static void glow_pos_at(float p, int n, uint8_t *cell, uint8_t *frac);
+static void stamp_row(const uint8_t *mask, int mw, int mh, uint8_t *rgb, int pw, int ph, int y);
+
+static __attribute__((noinline)) void big_finish_image(struct fos_dev *d, int y, uint8_t *rgb)
+{
+    const int bw = d->bw;
+    const struct fos_look *L = d->look;
+    int hal[3];
+    for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
+    int32_t grow[GW];
+    if (d->glow)
+    {
+        uint8_t gy, fy;
+        glow_pos_at(d->py0 + (y + 0.5f) * d->ph / d->bh - 0.5f, GH, &gy, &fy);
+        const int32_t *g0 = d->glow + gy * GW, *g1 = g0 + GW;
+        for (int j = 0; j < GW; j++) grow[j] = g0[j] * (8 - fy) + g1[j] * fy;
+    }
+    for (int x = 0; x < bw; x++)
+        picture_pixel(d, x, y, bw, d->bh, d->blin + 3 * x);
+    finish_pos(d->blin, d->bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
+               (int) (L->hal_thr * 4096));
+    finish_lut(d->bcam, rgb, bw);
+    if (d->shadows) shadow_row(rgb, bw, d->shadows);
+    int c = grain_clump(L, bw, grain_ref(d)), q3, q2, q1, q0;
+    grain_taps(c, &q3, &q2, &q1, &q0);
+    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, q3, q2, q1, q0);
+    stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
+    bloom_row(d, rgb, bw, y, bw, d->bh);
+}
+
+/* the picture onto the screen's print: its shape inside 720 x 480 */
+static int setup_image(struct fos_dev *d)
+{
+    if (d->pic_w < 32 || d->pic_h < 32) return fail(d, "the picture is too small");
+    long w = d->pic_w, h = d->pic_h;
+    if (w * FOS_PRINT_H >= h * FOS_PRINT_W) { d->pw = FOS_PRINT_W; d->ph = (int) ((FOS_PRINT_W * h + w / 2) / w); }
+    else { d->ph = FOS_PRINT_H; d->pw = (int) ((FOS_PRINT_H * w + h / 2) / h); }
+    if (d->pw < 1) d->pw = 1;
+    if (d->ph < 1) d->ph = 1;
+    d->px0 = (FOS_PRINT_W - d->pw) / 2;
+    d->py0 = (FOS_PRINT_H - d->ph) / 2;
+    d->ow = d->pw; d->oh = d->ph;
+    d->rows_axis_x = 0;
+    d->orient = 1;
+    d->crop_w = d->pic_w; d->crop_h = d->pic_h;
+    d->raw_w = d->pic_w; d->raw_h = d->pic_h;
+    d->clip = 4096;
+    d->total = 1;
+    d->lin = (uint16_t *) (d->sums = fos_port_alloc(FOS_PRINT_W * FOS_PRINT_H * 3 * 2));
+    d->rgb = fos_port_alloc(FOS_PRINT_W * FOS_PRINT_H * 3);
+    if (!d->sums || !d->rgb) return fail_mem(d, FOS_PRINT_W * FOS_PRINT_H * 5);
+    memset(d->sums, 0, FOS_PRINT_W * FOS_PRINT_H * 3 * 2);
+    memset(d->rgb, 0, FOS_PRINT_W * FOS_PRINT_H * 3);
+    if (d->look->halation > 0)
+    {
+        d->glow = fos_port_alloc(GW * GH * 4);
+        if (d->glow) memset(d->glow, 0, GW * GH * 4);
+    }
+    for (int size = d->want_big; size > FOS_SIZE_S && !d->big; size--)
+        if (!big_setup_image(d, size)) big_free(d);
+    if (!table_load(d->look, d->film))
+    {
+        fos_port_log("dev: no colour table for this film: the tables come in the zip's ML/DARKROOM, or "
+                     "FOS_MIX=1 mixes them from the looks");
+        return fail(d, "no colour table for this film");
+    }
+    /* the picture is already developed and exposed: no scanner */
+    for (int c = 0; c < 3; c++) d->mul[c] = 4096;
+    return 1;
+}
+
 /* row y of the print: vignette, halation, the film's table, grain */
 static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
 {
@@ -2851,6 +3358,7 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
     finish_pos(d->lin + 3 * (y * W + px0), d->pos, pw, 4096 - d->vig_y[y], d->vig_x,
                d->glow ? grow : 0, d->gx + px0, d->fx + px0, hal, (int) (L->hal_thr * 4096));
     finish_lut(d->pos, o + 3 * px0, pw);
+    if (d->shadows) shadow_row(o + 3 * px0, pw, d->shadows);
     int c = grain_clump(L, pw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
@@ -2966,7 +3474,8 @@ static void big_begin(struct fos_dev *d)
     for (int x = 0; x < bw; x++) { float t = 2.0f * x / (bw - 1) - 1; d->bvig_x[x] = (int16_t) (0.06f * t * t * 4096); }
     for (int k = 0; k < bh; k++) { float t = 2.0f * k / (bh - 1) - 1; d->bvig_y[k] = (int16_t) (0.06f * t * t * 4096); }
     /* a column's place on the glow's grid, by where it is on the screen's print */
-    const float sx0 = d->rows_axis_x ? (float) d->ox0 : 0, sw = d->rows_axis_x ? (float) d->ow : (float) FOS_PRINT_W;
+    const float sx0 = d->image ? (float) d->px0 : d->rows_axis_x ? (float) d->ox0 : 0;
+    const float sw = d->image ? (float) d->pw : d->rows_axis_x ? (float) d->ow : (float) FOS_PRINT_W;
     for (int x = 0; x < bw; x++) glow_pos_at(sx0 + (x + 0.5f) * sw / bw - 0.5f, GW, &d->bgx[x], &d->bfx[x]);
     if (d->jpeg[0])
     {
@@ -3061,11 +3570,13 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
     finish_pos(d->blin, d->bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
                (int) (L->hal_thr * 4096));
     finish_lut(d->bcam, rgb, bw);
+    if (d->shadows) shadow_row(rgb, bw, d->shadows);
     int c = grain_clump(L, bw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
     if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, q3, q2, q1, q0);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
+    bloom_row(d, rgb, bw, y, bw, d->bh);
 }
 
 /* its next rows, to the JPEG and the zoom file */
@@ -3073,7 +3584,10 @@ static void big_rows(struct fos_dev *d)
 {
     const int bw = d->bw, y0 = d->row, n = d->bh - y0 < BIG_ROWS ? d->bh - y0 : BIG_ROWS;
     for (int i = 0; i < n; i++)
-        big_finish(d, y0 + i, d->brgb + i * bw * 3);
+    {
+        if (d->image) big_finish_image(d, y0 + i, d->brgb + i * bw * 3);
+        else big_finish(d, y0 + i, d->brgb + i * bw * 3);
+    }
     if (d->bjpeg) fos_jpeg_rows(d->bjpeg, d->brgb, bw * 3, n);
     if (d->bzoom)
     {
@@ -3148,6 +3662,13 @@ static int dev_step(struct fos_dev *d, int budget_ms)
         {
             case ST_OPEN:
                 if (!tables_ready()) return fail_mem(d, (int) sizeof(*tab));
+                if (d->image)
+                {
+                    if (setup_image(d) < 0) return -1;
+                    d->stage = ST_IMAGE;
+                    d->row = 0;
+                    return progress(d);
+                }
                 d->f = fos_port_open(d->cr2, 0);
                 if (!d->f) return fail(d, "can't open the RAW file");
                 if (parse_tiff(d) < 0 || parse_ljpeg(d) < 0 || setup_maps(d) < 0) return -1;
@@ -3228,8 +3749,18 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                 d->stage = ST_FINISH;
                 d->row = 0;
                 break;
+            case ST_IMAGE:
+                image_rows(d, d->row, d->row + 8);
+                d->row += 8;
+                if (d->row >= H)
+                {
+                    d->row = 0;
+                    d->stage = d->glow ? ST_GLOW : ST_FINISH;
+                }
+                break;
             case ST_FINISH:
-                stage_finish(d, d->row);
+                if (d->image) stage_finish_image(d, d->row);
+                else stage_finish(d, d->row);
                 if (++d->row == H)
                 {
                     if (d->stamp)
@@ -3244,6 +3775,17 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                     fos_port_free(d->sums); d->sums = 0; d->lin = 0;
                     /* the bigger print comes after the palette, which its zoom file is in; it is the JPEG then */
                     if (!d->big) { fos_port_free(d->glow); d->glow = 0; }
+                    if (d->bloom_style) { d->stage = ST_BLOOM; d->row = -1; }
+                    else d->stage = d->big ? ST_QUANT : d->jpeg[0] ? ST_JPEG : ST_QUANT;
+                }
+                break;
+            case ST_BLOOM:
+                if (d->row < 0) { if (!bloom_build(d)) d->bloom_style = FOS_BLOOM_OFF; d->row = 0; break; }
+                bloom_apply_rows(d, d->row, d->row + 16);
+                d->row += 16;
+                if (d->row >= H || !d->bloom)
+                {
+                    d->row = 0;
                     d->stage = d->big ? ST_QUANT : d->jpeg[0] ? ST_JPEG : ST_QUANT;
                 }
                 break;

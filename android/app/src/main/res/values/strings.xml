@@ -3,9 +3,9 @@
     <string name="app_name">M-Film Darkroom</string>
     <string name="title">M-FILM</string>
     <string name="subtitle">darkroom · develop your rolls on the phone</string>
-    <string name="pick">Choose RAW files</string>
+    <string name="pick">Choose photos or RAW files</string>
     <string name="open_roll">Open a roll (ROLL_NNN.TXT)</string>
-    <string name="no_files">No RAW files chosen.</string>
+    <string name="no_files">No files chosen.</string>
     <string name="starting">Starting the darkroom…</string>
     <string name="film_label">FILM</string>
     <string name="size_label">PRINT SIZE</string>
@@ -17,8 +17,22 @@
     <string name="ready">%1$d films on the shelf.</string>
     <string name="engine_ready">Darkroom ready: %1$d films.</string>
     <string name="engine_failed">The darkroom didn\'t start: %1$s</string>
-    <string name="choose_first">Choose the RAW files first.</string>
+    <string name="choose_first">Choose the files first.</string>
     <string name="developing">Developing %1$d frame(s) with %2$s…</string>
+
+    <string name="adjust_title">SHADOWS · GLOW</string>
+    <string name="shadow">Shadows</string>
+    <string name="bloom_style">Style</string>
+    <string name="bloom_off">Off</string>
+    <string name="bloom_bloom">Bloom</string>
+    <string name="bloom_diffusion">Diffusion</string>
+    <string name="bloom_halation">Halation</string>
+    <string name="bloom_motion">Motion</string>
+    <string name="bloom_streak">Streak</string>
+    <string name="bloom_amount">Amount</string>
+    <string name="bloom_range">Range</string>
+    <string name="bloom_spread">Spread</string>
+    <string name="bloom_warmth">Warmth</string>
     <string name="working">%1$d of %2$d: %3$s</string>
     <string name="frame_done">%1$s in %2$.1f s → %3$s</string>
     <string name="done">%1$d developed, %2$d failed.</string>
@@ -29,7 +43,8 @@
     <string name="preview_title">PREVIEW · WHAT THE FILM DOES TO THIS FRAME</string>
     <string name="preview_empty">Choose a frame to see the preview.</string>
     <string name="preview_working">Previewing…</string>
-    <string name="preview_ready">preview · %1$s · 720 × 480</string>
+    <string name="preview_ready">preview · %1$s · %2$s · 720 × 480</string>
+    <string name="preview_ready_tap">frame %3$d of %4$d · %2$s · %1$s · tap for the next</string>
     <string name="preview_failed">Can\'t preview: %1$s</string>
 
     <string name="chip_iso">ISO</string>
@@ -57,7 +72,7 @@
     <string name="close">Close</string>
 
     <plurals name="frames">
-        <item quantity="one">%1$d RAW file ready.</item>
-        <item quantity="other">%1$d RAW files ready.</item>
+        <item quantity="one">%1$d file ready.</item>
+        <item quantity="other">%1$d files ready.</item>
     </plurals>
 </resources>

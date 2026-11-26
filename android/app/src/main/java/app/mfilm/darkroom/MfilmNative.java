@@ -28,13 +28,29 @@ final class MfilmNative {
      * Develop one CR2 into a JPEG.
      *
      * @param film    index on the shelf
-     * @param size    1 = medium (a third of the sensor), 2 = large (half)
+     * @param size    0 = the screen's print, 1 = medium (a third of the sensor), 2 = large (half)
      * @param stamp   1 to print the date in the corner
+     * @param shadows 0..100: lift the dark end of the print
+     * @param style   0 off, 1 bloom, 2 diffusion, 3 halation, 4 motion, 5 streak
+     * @param amount  0..100: how much glow lands on the print
+     * @param range   0..100: how far down the tones it is gathered from
+     * @param spread  0..100: how far it reaches
+     * @param warmth  -100..100: its tint, blue to amber
      * @param when    "2026-10-22 17:45" for the EXIF, or ""
      * @return 0 when the JPEG is written, -1 otherwise (see lastError)
      */
     static native int develop(String cr2, String jpeg, int film, int size, int stamp,
+                              int shadows, int style, int amount, int range, int spread, int warmth,
                               String when, Progress progress);
+
+    /**
+     * Develop a picture that is not a CR2 -- an image, or the preview a RAW of
+     * another make carries -- into a JPEG. pixels is ARGB, w x h, as
+     * Bitmap.getPixels gives them.
+     */
+    static native int developImage(int[] pixels, int w, int h, String jpeg, int film, int size,
+                                   int stamp, int shadows, int style, int amount, int range,
+                                   int spread, int warmth, String when, Progress progress);
 
     interface Progress {
         /** 0..1000 while the frame develops. */

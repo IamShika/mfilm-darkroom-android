@@ -141,6 +141,27 @@ void fos_dev_release();
 /* develop one frame: cr2 in, a print file out */
 struct fos_dev *fos_dev_start(const char *cr2, const char *print, int film, int frame,
                               const char *when, const char *fstop);
+
+/* A frame the camera did not shoot: an image file, or the full-size preview a
+ * RAW of another make carries. rgb is pic_w x pic_h, three bytes a pixel, top
+ * row first, sRGB; the print comes out with the same look a CR2's does. The
+ * buffer has to live until fos_dev_free. */
+struct fos_dev *fos_dev_start_image(const uint8_t *rgb, int pic_w, int pic_h,
+                                    const char *print, int film, int frame,
+                                    const char *when, const char *fstop);
+
+/* the darkroom's knobs, set before the first step: what the phone's sliders
+ * ask for. All 0 leaves the print as the camera makes it.
+ *   shadows   0..100  lift the dark end
+ *   style     FOS_BLOOM_*: what the glow is
+ *   amount    0..100  how much of it lands on the print
+ *   range     0..100  how far down the tones it is gathered from
+ *   spread    0..100  how far it reaches
+ *   warmth   -100..100  its tint, blue to amber */
+enum { FOS_BLOOM_OFF, FOS_BLOOM_BLOOM, FOS_BLOOM_DIFFUSION, FOS_BLOOM_HALATION,
+       FOS_BLOOM_MOTION, FOS_BLOOM_STREAK, FOS_BLOOM_COUNT };
+void fos_dev_adjust(struct fos_dev *d, int shadows, int style, int amount, int range,
+                    int spread, int warmth);
 /* work for about budget_ms; returns progress 0..1000, 1000 when the print
  * is written, or < 0 when the frame can't be developed */
 int fos_dev_step(struct fos_dev *d, int budget_ms);

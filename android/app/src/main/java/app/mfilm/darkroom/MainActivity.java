@@ -23,6 +23,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -41,6 +42,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.IntConsumer;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -70,6 +72,18 @@ public class MainActivity extends Activity {
     private Switch stampSwitch;
     private ProgressBar progressBar;
     private Button pickButton, developButton, galleryButton, rollButton;
+    private LinearLayout adjust;
+
+    /* the darkroom's knobs, as the phone's sliders leave them */
+    private int shadows;
+    private int bloomStyle;
+    private int bloomAmount = 50;
+    private int bloomRange = 50;
+    private int bloomSpread = 50;
+    private int bloomWarmth;
+
+    /* which of the picked frames the preview shows */
+    private int previewIndex;
 
     /* previews run one at a time; a newer request makes an older one stale */
     private final ExecutorService previews = Executors.newSingleThreadExecutor();
@@ -100,6 +114,7 @@ public class MainActivity extends Activity {
         canisters = findViewById(R.id.canisters);
         chips = findViewById(R.id.chips);
         canisterScroll = findViewById(R.id.canisterScroll);
+        adjust = findViewById(R.id.adjust);
 
         ArrayAdapter<String> sizes = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
                 new String[]{"Medium · a third of the sensor", "Large · half the sensor"});
@@ -107,6 +122,8 @@ public class MainActivity extends Activity {
         sizeSpinner.setAdapter(sizes);
         sizeSpinner.setSelection(1);
 
+        buildAdjustments();
+        previewImage.setOnClickListener(v -> nextPreview());
         pickButton.setOnClickListener(v -> pickRaws());
         rollButton.setOnClickListener(v -> pickRollFolder());
         developButton.setOnClickListener(v -> developAll());
@@ -321,7 +338,8 @@ public class MainActivity extends Activity {
     /**
      * The frame with the chosen film on it, at the engine's 720 x 480 print.
      * Same code path as a finished JPEG, just smaller, so what you see is
-     * what DEVELOP writes.
+     * what DEVELOP writes. Tapping the preview goes to the next picked frame,
+     * so a roll can be looked through with one film on it.
      */
     private void refreshPreview() {
         final int seq = previewSeq.incrementAndGet();
@@ -330,7 +348,10 @@ public class MainActivity extends Activity {
             previewNote.setText(getString(R.string.preview_empty));
             return;
         }
-        final Uri src = picked.get(0);
+        final int count = picked.size();
+        final int at = Math.floorMod(previewIndex, count);
+        final Uri src = picked.get(at);
+        final String name = displayName(src);
         final int film = filmIndex;
         final boolean stamp = stampSwitch.isChecked();
         final String filmName = films[film].name;
@@ -342,14 +363,10 @@ public class MainActivity extends Activity {
                 ui(() -> previewNote.setText(getString(R.string.preview_failed, "no cache dir")));
                 return;
             }
-            File raw = new File(dir, "frame.CR2");
             File jpeg = new File(dir, "frame.jpg");
             try {
-                copy(src, raw);
-                int r = MfilmNative.develop(raw.getAbsolutePath(), jpeg.getAbsolutePath(),
-                        film, 0, stamp ? 1 : 0, when(lastModified(src)), null);
-                raw.delete();
-                if (seq != previewSeq.get()) return;         // a newer film won
+                int r = developOne(src, dir, jpeg, film, 0, stamp, when(lastModified(src)), null);
+                if (seq != previewSeq.get()) return;         // a newer frame or film won
                 if (r != 0 || !jpeg.isFile()) {
                     final String err = MfilmNative.lastError();
                     ui(() -> previewNote.setText(getString(R.string.preview_failed,
@@ -361,14 +378,126 @@ public class MainActivity extends Activity {
                 ui(() -> {
                     if (seq != previewSeq.get()) return;
                     previewImage.setImageBitmap(b);
-                    previewNote.setText(getString(R.string.preview_ready, filmName));
+                    previewNote.setText(count > 1
+                            ? getString(R.string.preview_ready_tap, filmName, name, at + 1, count)
+                            : getString(R.string.preview_ready, filmName, name));
                 });
             } catch (Exception e) {
-                raw.delete();
                 final String msg = e.getMessage() == null ? e.toString() : e.getMessage();
                 ui(() -> previewNote.setText(getString(R.string.preview_failed, msg)));
             }
         });
+    }
+
+    /** the next picked frame, for the preview: a roll, one film at a time */
+    private void nextPreview() {
+        if (picked.size() < 2) return;
+        previewIndex = Math.floorMod(previewIndex + 1, picked.size());
+        refreshPreview();
+    }
+
+    /**
+     * One frame through the engine: a CR2 as it comes, and anything else as
+     * the picture inside it (an image, or the JPEG a RAW of another make
+     * carries). Leaves the finished JPEG at jpeg and says where the engine
+     * went wrong, if it did.
+     */
+    private int developOne(Uri src, File dir, File jpeg, int film, int size, boolean stamp,
+                           String when, MfilmNative.Progress progress) throws IOException {
+        String name = displayName(src);
+        File work = new File(dir, name);
+        try {
+            copy(src, work);
+            if (PictureLoader.isCr2(name)) {
+                return MfilmNative.develop(work.getAbsolutePath(), jpeg.getAbsolutePath(), film, size,
+                        stamp ? 1 : 0, shadows, bloomStyle, bloomAmount, bloomRange, bloomSpread,
+                        bloomWarmth, when, progress);
+            }
+            Bitmap b = PictureLoader.load(work, name);
+            int w = b.getWidth(), h = b.getHeight();
+            int[] px = new int[w * h];
+            b.getPixels(px, 0, w, 0, 0, w, h);
+            b.recycle();
+            return MfilmNative.developImage(px, w, h, jpeg.getAbsolutePath(), film, size,
+                    stamp ? 1 : 0, shadows, bloomStyle, bloomAmount, bloomRange, bloomSpread,
+                    bloomWarmth, when, progress);
+        } finally {
+            work.delete();
+        }
+    }
+
+    /* -------------------------------------------------------------- the knobs */
+
+    /**
+     * Shadows and the glow panel: the same set of things Adobe's Glow tab
+     * has, at the values it starts from (all at 50, warmth 0). They go to the
+     * engine with every preview and every DEVELOP.
+     */
+    private void buildAdjustments() {
+        addSlider(getString(R.string.shadow), 0, 100, shadows, v -> shadows = v);
+        addChoice(getString(R.string.bloom_style),
+                new String[]{ getString(R.string.bloom_off), getString(R.string.bloom_bloom),
+                        getString(R.string.bloom_diffusion), getString(R.string.bloom_halation),
+                        getString(R.string.bloom_motion), getString(R.string.bloom_streak) },
+                bloomStyle, v -> bloomStyle = v);
+        addSlider(getString(R.string.bloom_amount), 0, 100, bloomAmount, v -> bloomAmount = v);
+        addSlider(getString(R.string.bloom_range), 0, 100, bloomRange, v -> bloomRange = v);
+        addSlider(getString(R.string.bloom_spread), 0, 100, bloomSpread, v -> bloomSpread = v);
+        addSlider(getString(R.string.bloom_warmth), -100, 100, bloomWarmth, v -> bloomWarmth = v);
+    }
+
+    /** one slider: its value shown beside its name, and the preview again once the finger is lifted */
+    private void addSlider(String label, int min, int max, int value, IntConsumer set) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        TextView head = new TextView(this);
+        head.setTextSize(11);
+        head.setLetterSpacing(0.06f);
+        head.setTextColor(0xFFDDBB90);
+        head.setText(label + "   " + (value > 0 && min < 0 ? "+" + value : String.valueOf(value)));
+        SeekBar bar = new SeekBar(this);
+        bar.setMax(max - min);
+        bar.setProgress(value - min);
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                int v = p + min;
+                set.accept(v);
+                head.setText(label + "   " + (v > 0 && min < 0 ? "+" + v : String.valueOf(v)));
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) { }
+            @Override public void onStopTrackingTouch(SeekBar s) { refreshPreview(); }
+        });
+        row.addView(head);
+        row.addView(bar);
+        adjust.addView(row);
+    }
+
+    /** the glow's style: a spinner, as the darkroom's own pages have */
+    private void addChoice(String label, String[] choices, int value, IntConsumer set) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        TextView head = new TextView(this);
+        head.setTextSize(11);
+        head.setLetterSpacing(0.06f);
+        head.setTextColor(0xFFDDBB90);
+        head.setText(label);
+        head.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        Spinner sp = new Spinner(this);
+        ArrayAdapter<String> a = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, choices);
+        a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sp.setAdapter(a);
+        sp.setSelection(value);
+        sp.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
+                set.accept(pos);
+                refreshPreview();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
+        row.addView(head);
+        row.addView(sp);
+        adjust.addView(row);
     }
 
     /* -------------------------------------------------------------- picking */
@@ -398,6 +527,7 @@ public class MainActivity extends Activity {
 
         if (requestCode == PICK_RAWS) {
             picked.clear();
+            previewIndex = 0;
             if (data.getClipData() != null) {
                 for (int i = 0; i < data.getClipData().getItemCount(); i++) {
                     Uri u = data.getClipData().getItemAt(i).getUri();
@@ -433,6 +563,7 @@ public class MainActivity extends Activity {
         String key = data.getStringExtra(RollActivity.EXTRA_FILM);
         String roll = data.getStringExtra(RollActivity.EXTRA_ROLL);
         picked.clear();
+        previewIndex = 0;
         for (String s : uris) {
             Uri u = Uri.parse(s);
             grant(u);
@@ -504,15 +635,11 @@ public class MainActivity extends Activity {
                 String base = name.replaceAll("\\.[^.]*$", "");
                 String when = when(lastModified(uri));
                 try {
-                    File raw = new File(work, name);
-                    copy(uri, raw);
                     File jpeg = new File(work, base + ".jpg");
                     ui(() -> statusView.setText(getString(R.string.working, n, raws.size(), name)));
                     long s0 = System.currentTimeMillis();
-                    int r = MfilmNative.develop(raw.getAbsolutePath(), jpeg.getAbsolutePath(),
-                            film, size, stamp ? 1 : 0, when,
+                    int r = developOne(uri, work, jpeg, film, size, stamp, when,
                             p -> runOnUiThread(() -> progressBar.setProgress(p / 10)));
-                    raw.delete();
                     if (r != 0) {
                         failed++;
                         final String err = MfilmNative.lastError();

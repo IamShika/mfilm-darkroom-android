@@ -108,6 +108,45 @@ JNIEXPORT jstring JNICALL JNI_FN(version)(JNIEnv *env, jclass cls)
 #endif
 }
 
+/* The steps, the progress reported as it goes, and the print the engine
+ * keeps beside the JPEG taken away again: the app wants only the JPEG. */
+static int run_develop(JNIEnv *env, struct fos_dev *d, const char *out, jint size, jint stamp,
+                       jobject progress)
+{
+    char print[1024];
+    snprintf(print, sizeof(print), "%s.fop", out);
+
+    jmethodID mid = 0;
+    if (progress)
+    {
+        jclass pc = (*env)->GetObjectClass(env, progress);
+        mid = (*env)->GetMethodID(env, pc, "onProgress", "(I)V");
+        (*env)->DeleteLocalRef(env, pc);
+    }
+
+    /* the JPEG before the first step, and the bigger print too */
+    fos_dev_jpeg(d, out);
+    if (size > FOS_SIZE_S) fos_dev_big(d, size, 0);
+    if (stamp) fos_dev_stamp(d, 1);
+
+    int p = 0;
+    while ((p = fos_dev_step(d, 40)) >= 0 && p < 1000)
+    {
+        if (mid) (*env)->CallVoidMethod(env, progress, mid, p);
+    }
+    if (p < 0)
+    {
+        const char *err = fos_dev_error(d);
+        snprintf(last_error, sizeof(last_error), "%s", err ? err : "develop failed");
+        fos_dev_free(d);
+        remove(print);
+        return -1;
+    }
+    fos_dev_free(d);
+    remove(print);
+    return 0;
+}
+
 /* Develop one CR2 into a JPEG at full print size.
  *
  *   cr2   the RAW on disk
@@ -115,13 +154,17 @@ JNIEXPORT jstring JNICALL JNI_FN(version)(JNIEnv *env, jclass cls)
  *   film  index on the shelf (its table is LOOKnn.LUT in the tables folder)
  *   size  FOS_SIZE_M (a third of the sensor each way) or FOS_SIZE_L (half)
  *   stamp 1 to print the date in the corner
+ *   shadows, style, amount, range, spread, warmth: the phone's knobs, as
+ *         fos_dev_adjust takes them (0 leaves the camera's print)
  *   when  "2026-10-22 17:45" for the EXIF, or empty
  *
  * Returns 0 when the JPEG is written, -1 when the frame can't be developed
  * (lastError() says why). progress.onProgress runs 0..1000 while it works.
  */
 JNIEXPORT jint JNICALL JNI_FN(develop)(JNIEnv *env, jclass cls, jstring jcr2, jstring jout,
-                                       jint film, jint size, jint stamp, jstring jwhen, jobject progress)
+                                       jint film, jint size, jint stamp,
+                                       jint shadows, jint style, jint amount, jint range,
+                                       jint spread, jint warmth, jstring jwhen, jobject progress)
 {
     const char *cr2 = (*env)->GetStringUTFChars(env, jcr2, 0);
     const char *out = (*env)->GetStringUTFChars(env, jout, 0);
@@ -138,46 +181,82 @@ JNIEXPORT jint JNICALL JNI_FN(develop)(JNIEnv *env, jclass cls, jstring jcr2, js
     char print[1024];
     snprintf(print, sizeof(print), "%s.fop", out);
 
-    jmethodID mid = 0;
-    if (progress)
-    {
-        jclass pc = (*env)->GetObjectClass(env, progress);
-        mid = (*env)->GetMethodID(env, pc, "onProgress", "(I)V");
-        (*env)->DeleteLocalRef(env, pc);
-    }
-
+    int r = -1;
     struct fos_dev *d = fos_dev_start(cr2, print, film, 1, when ? when : "", "");
     if (!d)
     {
         snprintf(last_error, sizeof(last_error), "can't start the frame: %s", cr2);
-        goto done;
     }
-    /* the JPEG before the first step, and the bigger print too */
-    fos_dev_jpeg(d, out);
-    if (size > FOS_SIZE_S) fos_dev_big(d, size, 0);
-    if (stamp) fos_dev_stamp(d, 1);
-
-    int p = 0;
-    while ((p = fos_dev_step(d, 40)) >= 0 && p < 1000)
+    else
     {
-        if (mid) (*env)->CallVoidMethod(env, progress, mid, p);
+        fos_dev_adjust(d, shadows, style, amount, range, spread, warmth);
+        r = run_develop(env, d, out, size, stamp, progress);
     }
-    if (p < 0)
-    {
-        const char *err = fos_dev_error(d);
-        snprintf(last_error, sizeof(last_error), "%s", err ? err : "develop failed");
-        fos_dev_free(d);
-        goto done;
-    }
-    fos_dev_free(d);
-    remove(print);
     (*env)->ReleaseStringUTFChars(env, jcr2, cr2);
     (*env)->ReleaseStringUTFChars(env, jout, out);
     if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
-    return 0;
+    return r;
+}
+
+/* The same, for a frame that is not a CR2: an image file, or the full-size
+ * preview lifted out of a RAW of another make. The pixels are ARGB as
+ * Bitmap.getPixels gives them, pic_w x pic_h of them. */
+JNIEXPORT jint JNICALL JNI_FN(developImage)(JNIEnv *env, jclass cls, jintArray jpixels, jint pic_w,
+                                            jint pic_h, jstring jout, jint film, jint size,
+                                            jint stamp, jint shadows, jint style, jint amount,
+                                            jint range, jint spread, jint warmth, jstring jwhen,
+                                            jobject progress)
+{
+    const char *out = (*env)->GetStringUTFChars(env, jout, 0);
+    const char *when = jwhen ? (*env)->GetStringUTFChars(env, jwhen, 0) : 0;
+    if (!out || pic_w < 1 || pic_h < 1)
+    {
+        snprintf(last_error, sizeof(last_error), "bad picture");
+        if (out) (*env)->ReleaseStringUTFChars(env, jout, out);
+        if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+        return -1;
+    }
+    last_error[0] = 0;
+
+    size_t n = (size_t) pic_w * (size_t) pic_h;
+    uint8_t *rgb = malloc(n * 3);
+    jint *px = jpixels ? (*env)->GetIntArrayElements(env, jpixels, 0) : 0;
+    if (!rgb || !px)
+    {
+        snprintf(last_error, sizeof(last_error), "out of memory for a %d x %d picture", pic_w, pic_h);
+        goto done;
+    }
+    for (size_t i = 0; i < n; i++)
+    {
+        unsigned v = (unsigned) px[i];
+        rgb[3 * i] = (uint8_t) (v >> 16 & 255);
+        rgb[3 * i + 1] = (uint8_t) (v >> 8 & 255);
+        rgb[3 * i + 2] = (uint8_t) (v & 255);
+    }
+    (*env)->ReleaseIntArrayElements(env, jpixels, px, JNI_ABORT);
+    px = 0;
+
+    char print[1024];
+    snprintf(print, sizeof(print), "%s.fop", out);
+    struct fos_dev *d = fos_dev_start_image(rgb, pic_w, pic_h, print, film, 1, when ? when : "", "");
+    int r = -1;
+    if (!d)
+    {
+        snprintf(last_error, sizeof(last_error), "can't start a %d x %d picture", pic_w, pic_h);
+    }
+    else
+    {
+        fos_dev_adjust(d, shadows, style, amount, range, spread, warmth);
+        r = run_develop(env, d, out, size, stamp, progress);
+    }
+    free(rgb);
+    (*env)->ReleaseStringUTFChars(env, jout, out);
+    if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+    return r;
 
 done:
-    (*env)->ReleaseStringUTFChars(env, jcr2, cr2);
+    if (px) (*env)->ReleaseIntArrayElements(env, jpixels, px, JNI_ABORT);
+    free(rgb);
     (*env)->ReleaseStringUTFChars(env, jout, out);
     if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
     return -1;
