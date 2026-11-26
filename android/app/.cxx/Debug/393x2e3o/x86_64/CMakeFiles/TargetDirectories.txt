@@ -1,3 +1,0 @@
-/workspace/chats/349e36e861e7034a1c3a7be5/mfilm/android/app/.cxx/Debug/393x2e3o/x86_64/CMakeFiles/mfilmdarkroom.dir
-/workspace/chats/349e36e861e7034a1c3a7be5/mfilm/android/app/.cxx/Debug/393x2e3o/x86_64/CMakeFiles/edit_cache.dir
-/workspace/chats/349e36e861e7034a1c3a7be5/mfilm/android/app/.cxx/Debug/393x2e3o/x86_64/CMakeFiles/rebuild_cache.dir
