@@ -4,6 +4,7 @@
     <string name="title">M-FILM</string>
     <string name="subtitle">darkroom · develop your rolls on the phone</string>
     <string name="pick">Choose RAW files</string>
+    <string name="open_roll">Open a roll (ROLL_NNN.TXT)</string>
     <string name="no_files">No RAW files chosen.</string>
     <string name="starting">Starting the darkroom…</string>
     <string name="film_label">FILM</string>
@@ -24,6 +25,36 @@
     <string name="took">%1$.1f s in all.</string>
     <string name="no_gallery">No gallery app found.</string>
     <string name="licences">Licences</string>
+
+    <string name="preview_title">PREVIEW · WHAT THE FILM DOES TO THIS FRAME</string>
+    <string name="preview_empty">Choose a frame to see the preview.</string>
+    <string name="preview_working">Previewing…</string>
+    <string name="preview_ready">preview · %1$s · 720 × 480</string>
+    <string name="preview_failed">Can\'t preview: %1$s</string>
+
+    <string name="chip_iso">ISO</string>
+    <string name="chip_process">PROCESS</string>
+    <string name="chip_exp">EXP</string>
+
+    <string name="roll_pick">Pick the folder that holds ROLL_NNN.TXT</string>
+    <string name="roll_title">ROLL %1$s</string>
+    <string name="roll_sub">%1$s · %2$d frames · %3$s</string>
+    <string name="roll_no_film">film unknown</string>
+    <string name="roll_loading">Reading the roll…</string>
+    <string name="roll_none">No ROLL_NNN.TXT in that folder.</string>
+    <string name="roll_no_frames">That roll lists no frames this folder has.</string>
+    <string name="roll_failed">Can\'t read that folder: %1$s</string>
+    <string name="roll_thumbs">Developing previews: %1$d of %2$d…</string>
+    <string name="roll_thumbs_done">Previews ready.</string>
+    <string name="roll_all">Select all</string>
+    <string name="roll_nothing">None</string>
+    <string name="roll_add">Add %1$d to the darkroom</string>
+    <string name="roll_add_empty">Add to the darkroom</string>
+    <string name="select">Select</string>
+    <string name="deselect">Deselect</string>
+    <string name="develop_one">Develop this one</string>
+    <string name="roll_added">Roll %1$s: %2$d frame(s) in the darkroom.</string>
+    <string name="close">Close</string>
 
     <plurals name="frames">
         <item quantity="one">%1$d RAW file ready.</item>

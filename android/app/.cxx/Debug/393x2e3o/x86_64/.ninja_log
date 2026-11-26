@@ -8,3 +8,5 @@
 6	878	1795654700091557687	CMakeFiles/mfilmdarkroom.dir/mfilm/fos_film.c.o	54064cdede5c18cc
 2	1152	1795654700365559233	CMakeFiles/mfilmdarkroom.dir/mfilm/fos_dev.c.o	6113c0c3a89ff6e2
 1152	1211	1795654700425653681	/workspace/chats/349e36e861e7034a1c3a7be5/mfilm/android/app/build/intermediates/cxx/Debug/393x2e3o/obj/x86_64/libmfilmdarkroom.so	42e2d9539ea1832c
+2	82	1795660129239446968	CMakeFiles/mfilmdarkroom.dir/mfilm_jni.c.o	888eb57719ed352d
+82	140	1795660129298770652	/workspace/chats/349e36e861e7034a1c3a7be5/mfilm/android/app/build/intermediates/cxx/Debug/393x2e3o/obj/x86_64/libmfilmdarkroom.so	42e2d9539ea1832c

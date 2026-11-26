@@ -17,6 +17,9 @@ final class MfilmNative {
     /** "brand|name|iso|process|group|key" for the i-th film on the shelf. */
     static native String filmInfo(int i);
 
+    /** "desc|shortname|grain|punch|colour|warmth" for the i-th film: what the shelf shows. */
+    static native String filmDetail(int i);
+
     static native String lastError();
 
     static native String version();

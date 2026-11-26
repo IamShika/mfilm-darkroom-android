@@ -14,7 +14,13 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
   card reader, the folder `DCIM/100CANON` on a card that came out of the camera
 * or open a CR2 from a file manager and share one to it from another app — the frame is added to
   the queue and developed with the film and size already chosen
-* choose one of the **68 film stocks** and its print size
+* see the frame **before** you develop it: the preview panel runs the same engine at its 720 × 480
+  print, so the look on screen is the look DEVELOP writes
+* choose one of the **68 film stocks** on a shelf like the camera's — COLOUR / SLIDE / B&W / CINE,
+  canisters in their box colours, with the film's blurb, ISO and process under the name
+* **open a roll**: point it at the folder holding `ROLL_NNN.TXT` and the app reads the log, finds
+  the frames it lists, takes the film the roll was shot on, and shows them as a contact sheet —
+  tap one for a full preview, tick what you want (or select all) and they land in the darkroom
 * develop into `Pictures/M-Film`, JPEG with the film in its EXIF
 
 | Print size | Pixels | What it is |
@@ -25,6 +31,26 @@ These are the camera's two bigger sizes (`FOS_SIZE_M`, `FOS_SIZE_L`). The camera
 a frame for Large; a phone does it in a few seconds. The desktop *Darkrooms* goes to the full RAW
 (5184 × 3456) — the camera engine keeps its sums in bands of a megabyte built for DIGIC memory, so
 full resolution is a bigger change than this port (`BIG_BANDS` in `fos_dev.c`).
+
+## The roll log
+
+The camera's filmroll module leaves a `ROLL_NNN.TXT` in the folder beside the frames:
+
+```
+# ML film mode roll log (filmroll module)
+roll = 013
+film = redscale100
+exposures = 24
+loaded = 2026-11-25 16:07:36
+
+1 IMG_3657.CR2 2026-11-25 16:08:08 f/4.5
+...
+```
+
+*Open a roll* asks for that folder (the folder itself, not the text file: Android hands an app a
+folder and the app lists what is in it). The app takes the newest `ROLL_*.TXT`, matches each listed
+frame by name, and sets the film from the `film =` line, so a roll imports with the stock it was
+shot on instead of whatever was on the shelf.
 
 ## Build it
 

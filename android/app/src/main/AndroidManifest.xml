@@ -8,6 +8,13 @@
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
 
+        <!-- the contact sheet of a roll the camera logged in ROLL_NNN.TXT -->
+        <activity
+            android:name=".RollActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:label="@string/app_name" />
+
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"

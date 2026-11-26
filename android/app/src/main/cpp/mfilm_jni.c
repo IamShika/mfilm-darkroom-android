@@ -83,6 +83,17 @@ JNIEXPORT jstring JNICALL JNI_FN(filmInfo)(JNIEnv *env, jclass cls, jint i)
     return (*env)->NewStringUTF(env, buf);
 }
 
+/* "desc|shortname|grain|punch|colour|warmth": what the shelf shows under the name */
+JNIEXPORT jstring JNICALL JNI_FN(filmDetail)(JNIEnv *env, jclass cls, jint i)
+{
+    if (i < 0 || i >= fos_nfilms) return (*env)->NewStringUTF(env, "");
+    const struct fos_film *f = &fos_films[i];
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s|%s|%d|%d|%d|%d", f->desc ? f->desc : "",
+             f->shortname ? f->shortname : "", f->grain, f->punch, f->colour, f->warmth);
+    return (*env)->NewStringUTF(env, buf);
+}
+
 JNIEXPORT jstring JNICALL JNI_FN(lastError)(JNIEnv *env, jclass cls)
 {
     return (*env)->NewStringUTF(env, last_error);

@@ -6,14 +6,21 @@ import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.util.TypedValue;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -32,6 +39,9 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * M-Film Darkroom: develops the CR2s a Magic Lantern M-Film camera shot, on
@@ -41,17 +51,29 @@ import java.util.Locale;
 public class MainActivity extends Activity {
 
     private static final int PICK_RAWS = 42;
+    private static final int PICK_ROLL_FOLDER = 43;
+    private static final int ROLL_FRAMES = 44;
 
     private final List<Uri> picked = new ArrayList<>();
     private Uri shared;                      // a frame opened or shared into us
-    private String[] filmLabels = new String[0];
-    private String[] filmKeys = new String[0];
+    private Film[] films = new Film[0];
+    private int filmIndex = -1;
+    private String currentGroup = "COLOUR";
+    private boolean busy = true;
 
     private TextView filesView, logView, statusView, versionView;
-    private Spinner filmSpinner, sizeSpinner;
+    private TextView filmBrandView, filmNameView, filmDescView, previewNote;
+    private LinearLayout tabs, canisters, chips;
+    private HorizontalScrollView canisterScroll;
+    private ImageView previewImage;
+    private Spinner sizeSpinner;
     private Switch stampSwitch;
     private ProgressBar progressBar;
-    private Button pickButton, developButton, galleryButton;
+    private Button pickButton, developButton, galleryButton, rollButton;
+
+    /* previews run one at a time; a newer request makes an older one stale */
+    private final ExecutorService previews = Executors.newSingleThreadExecutor();
+    private final AtomicInteger previewSeq = new AtomicInteger();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -62,13 +84,22 @@ public class MainActivity extends Activity {
         logView = findViewById(R.id.log);
         statusView = findViewById(R.id.status);
         versionView = findViewById(R.id.version);
-        filmSpinner = findViewById(R.id.film);
         sizeSpinner = findViewById(R.id.size);
         stampSwitch = findViewById(R.id.stamp);
         progressBar = findViewById(R.id.progress);
         pickButton = findViewById(R.id.pick);
         developButton = findViewById(R.id.develop);
         galleryButton = findViewById(R.id.gallery);
+        rollButton = findViewById(R.id.roll);
+        previewImage = findViewById(R.id.preview);
+        previewNote = findViewById(R.id.previewNote);
+        filmBrandView = findViewById(R.id.filmBrand);
+        filmNameView = findViewById(R.id.filmName);
+        filmDescView = findViewById(R.id.filmDesc);
+        tabs = findViewById(R.id.tabs);
+        canisters = findViewById(R.id.canisters);
+        chips = findViewById(R.id.chips);
+        canisterScroll = findViewById(R.id.canisterScroll);
 
         ArrayAdapter<String> sizes = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
                 new String[]{"Medium · a third of the sensor", "Large · half the sensor"});
@@ -77,9 +108,11 @@ public class MainActivity extends Activity {
         sizeSpinner.setSelection(1);
 
         pickButton.setOnClickListener(v -> pickRaws());
+        rollButton.setOnClickListener(v -> pickRollFolder());
         developButton.setOnClickListener(v -> developAll());
         galleryButton.setOnClickListener(v -> openGallery());
         versionView.setOnClickListener(v -> showLicences());
+        stampSwitch.setOnCheckedChangeListener((b, on) -> refreshPreview());
 
         shared = uriFrom(getIntent());
 
@@ -113,9 +146,9 @@ public class MainActivity extends Activity {
         if (uri.equals(shared)) shared = null;
         grant(uri);
         if (!picked.contains(uri)) picked.add(uri);
-        filesView.setText(getResources().getQuantityString(R.plurals.frames, picked.size(), picked.size()));
-        developButton.setEnabled(!picked.isEmpty() && filmLabels.length > 0);
-        if (filmLabels.length == 0) shared = uri;   // still loading the shelf
+        updateFiles();
+        refreshPreview();
+        if (films.length == 0) shared = uri;   // still loading the shelf
     }
 
     /* ------------------------------------------------------------ the engine */
@@ -136,33 +169,27 @@ public class MainActivity extends Activity {
             File bin = new File(base, "FOSFILMS.BIN");
             if (!bin.exists()) copyAsset("mfilm/FOSFILMS.BIN", bin);
 
-            int n = MfilmNative.loadFilms(bin.getAbsolutePath());
+            final int n = MfilmNative.loadFilms(bin.getAbsolutePath());
             if (n <= 0) throw new IOException(MfilmNative.lastError());
             MfilmNative.setTables(tables.getAbsolutePath());
 
-            String[] labels = new String[n];
-            String[] keys = new String[n];
+            final Film[] shelf = new Film[n];
             for (int i = 0; i < n; i++) {
-                String info = MfilmNative.filmInfo(i);
-                labels[i] = label(info);
-                String[] p = info.split("\\|", -1);
-                keys[i] = p.length > 5 ? p[5] : "film";
+                shelf[i] = new Film(i, MfilmNative.filmInfo(i), MfilmNative.filmDetail(i));
             }
-            filmLabels = labels;
-            filmKeys = keys;
             final String version = MfilmNative.version();
             runOnUiThread(() -> {
-                ArrayAdapter<String> films = new ArrayAdapter<>(this,
-                        android.R.layout.simple_spinner_item, filmLabels);
-                films.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-                filmSpinner.setAdapter(films);
-                int portra = indexOfKey("portra400");
-                if (portra >= 0) filmSpinner.setSelection(portra);
+                films = shelf;
+                filmIndex = indexOfKey("portra400");
+                if (filmIndex < 0 && films.length > 0) filmIndex = 0;
+                if (filmIndex >= 0 && !films[filmIndex].group.isEmpty()) currentGroup = films[filmIndex].group;
                 versionView.setText(getString(R.string.version, version));
-                statusView.setText(getString(R.string.ready, filmLabels.length));
+                statusView.setText(getString(R.string.ready, films.length));
+                buildShelf();
                 setBusy(false);
-                log(getString(R.string.engine_ready, filmLabels.length));
+                log(getString(R.string.engine_ready, films.length));
                 if (shared != null) addFrame(shared);
+                else refreshPreview();
             });
         } catch (Exception e) {
             final String msg = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -174,20 +201,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** "Kodak|Portra 400|400|C-41|COLOUR|portra400" -> "Kodak Portra 400 · 400 ISO · C-41" */
-    private String label(String info) {
-        String[] p = info.split("\\|", -1);
-        if (p.length < 6) return info;
-        return (p[0] + " " + p[1]).trim() + " · " + p[2] + " ISO · " + p[3];
-    }
-
-    private int indexOfKey(String key) {
-        for (int i = 0; i < filmKeys.length; i++) {
-            if (filmKeys[i].equalsIgnoreCase(key)) return i;
-        }
-        return -1;
-    }
-
     private void copyAsset(String name, File dst) throws IOException {
         try (InputStream in = getAssets().open(name);
              OutputStream out = new FileOutputStream(dst)) {
@@ -195,6 +208,167 @@ public class MainActivity extends Activity {
             int n;
             while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
         }
+    }
+
+    private int indexOfKey(String key) {
+        if (key == null || key.isEmpty()) return -1;
+        for (int i = 0; i < films.length; i++) {
+            if (films[i].key.equalsIgnoreCase(key)) return i;
+        }
+        return -1;
+    }
+
+    /* ---------------------------------------------------------- film shelf */
+
+    /** The camera's shelf: group tabs, the canisters, then the film's name and numbers. */
+    private void buildShelf() {
+        tabs.removeAllViews();
+        for (String g : new String[]{"COLOUR", "SLIDE", "B&W", "CINE"}) {
+            TextView t = new TextView(this);
+            t.setText(g);
+            t.setTextSize(11);
+            t.setLetterSpacing(0.18f);
+            t.setPadding((int) dp(9), (int) dp(6), (int) dp(9), (int) dp(6));
+            t.setTextColor(g.equalsIgnoreCase(currentGroup) ? 0xFFE0A33E : 0xFF6E5A4C);
+            t.setOnClickListener(v -> {
+                if (busy) return;
+                currentGroup = g;
+                buildShelf();
+            });
+            tabs.addView(t);
+        }
+
+        canisters.removeAllViews();
+        for (Film f : films) {
+            String group = f.group.isEmpty() ? "COLOUR" : f.group;
+            if (!group.equalsIgnoreCase(currentGroup)) continue;
+            CanisterView c = new CanisterView(this);
+            c.setFilm(f);
+            c.setChosen(f.index == filmIndex);
+            c.setTag(f.index);
+            c.setOnClickListener(v -> {
+                if (busy) return;
+                chooseFilm((Integer) v.getTag());
+            });
+            LinearLayout.LayoutParams lp =
+                    new LinearLayout.LayoutParams((int) dp(74), (int) dp(126));
+            lp.rightMargin = (int) dp(8);
+            lp.leftMargin = (int) dp(8);
+            canisters.addView(c, lp);
+        }
+        scrollToChosen();
+
+        chips.removeAllViews();
+        if (filmIndex < 0 || filmIndex >= films.length) {
+            filmBrandView.setText("");
+            filmNameView.setText("");
+            filmDescView.setText("");
+            return;
+        }
+        Film f = films[filmIndex];
+        filmBrandView.setText(f.brand.toUpperCase(Locale.US));
+        filmNameView.setText(f.name);
+        filmDescView.setText(f.desc);
+        chips.addView(chip(getString(R.string.chip_iso), f.boxSpeed(), false));
+        chips.addView(chip(getString(R.string.chip_process), f.process, false));
+        chips.addView(chip(getString(R.string.chip_exp), "36", true));
+    }
+
+    private void scrollToChosen() {
+        if (filmIndex < 0) return;
+        canisterScroll.post(() -> {
+            for (int i = 0; i < canisters.getChildCount(); i++) {
+                View v = canisters.getChildAt(i);
+                if (v.getTag() instanceof Integer && (Integer) v.getTag() == filmIndex) {
+                    int x = v.getLeft() - (canisterScroll.getWidth() - v.getWidth()) / 2;
+                    canisterScroll.smoothScrollTo(Math.max(0, x), 0);
+                    return;
+                }
+            }
+        });
+    }
+
+    private TextView chip(String label, String value, boolean accent) {
+        TextView t = new TextView(this);
+        t.setText(label + "  " + value);
+        t.setTextSize(11);
+        t.setLetterSpacing(0.06f);
+        t.setTextColor(accent ? 0xFFE0A33E : 0xFFF1DFC0);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(14));
+        bg.setColor(0x00000000);
+        bg.setStroke(Math.max(1, (int) dp(1)), accent ? 0xFFE0A33E : 0x66DDBB90);
+        t.setBackground(bg);
+        t.setPadding((int) dp(11), (int) dp(5), (int) dp(11), (int) dp(5));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = (int) dp(3);
+        lp.rightMargin = (int) dp(3);
+        t.setLayoutParams(lp);
+        return t;
+    }
+
+    private void chooseFilm(int i) {
+        if (i < 0 || i >= films.length) return;
+        filmIndex = i;
+        if (!films[i].group.isEmpty()) currentGroup = films[i].group;
+        buildShelf();
+        refreshPreview();
+    }
+
+    /* ------------------------------------------------------------- preview */
+
+    /**
+     * The frame with the chosen film on it, at the engine's 720 x 480 print.
+     * Same code path as a finished JPEG, just smaller, so what you see is
+     * what DEVELOP writes.
+     */
+    private void refreshPreview() {
+        final int seq = previewSeq.incrementAndGet();
+        if (picked.isEmpty() || filmIndex < 0) {
+            previewImage.setImageDrawable(null);
+            previewNote.setText(getString(R.string.preview_empty));
+            return;
+        }
+        final Uri src = picked.get(0);
+        final int film = filmIndex;
+        final boolean stamp = stampSwitch.isChecked();
+        final String filmName = films[film].name;
+        previewNote.setText(getString(R.string.preview_working));
+
+        previews.execute(() -> {
+            File dir = new File(getCacheDir(), "preview");
+            if (!dir.isDirectory() && !dir.mkdirs()) {
+                ui(() -> previewNote.setText(getString(R.string.preview_failed, "no cache dir")));
+                return;
+            }
+            File raw = new File(dir, "frame.CR2");
+            File jpeg = new File(dir, "frame.jpg");
+            try {
+                copy(src, raw);
+                int r = MfilmNative.develop(raw.getAbsolutePath(), jpeg.getAbsolutePath(),
+                        film, 0, stamp ? 1 : 0, when(lastModified(src)), null);
+                raw.delete();
+                if (seq != previewSeq.get()) return;         // a newer film won
+                if (r != 0 || !jpeg.isFile()) {
+                    final String err = MfilmNative.lastError();
+                    ui(() -> previewNote.setText(getString(R.string.preview_failed,
+                            err.isEmpty() ? "engine" : err)));
+                    return;
+                }
+                Bitmap b = BitmapFactory.decodeFile(jpeg.getAbsolutePath());
+                if (b == null) return;
+                ui(() -> {
+                    if (seq != previewSeq.get()) return;
+                    previewImage.setImageBitmap(b);
+                    previewNote.setText(getString(R.string.preview_ready, filmName));
+                });
+            } catch (Exception e) {
+                raw.delete();
+                final String msg = e.getMessage() == null ? e.toString() : e.getMessage();
+                ui(() -> previewNote.setText(getString(R.string.preview_failed, msg)));
+            }
+        });
     }
 
     /* -------------------------------------------------------------- picking */
@@ -207,23 +381,72 @@ public class MainActivity extends Activity {
         startActivityForResult(i, PICK_RAWS);
     }
 
+    /** The folder holding ROLL_NNN.TXT; the roll screen finds the frames in it. */
+    private void pickRollFolder() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        try {
+            startActivityForResult(i, PICK_ROLL_FOLDER);
+        } catch (Exception e) {
+            toast(getString(R.string.no_gallery));
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != PICK_RAWS || resultCode != RESULT_OK || data == null) return;
-        picked.clear();
-        if (data.getClipData() != null) {
-            for (int i = 0; i < data.getClipData().getItemCount(); i++) {
-                Uri u = data.getClipData().getItemAt(i).getUri();
-                grant(u);
-                picked.add(u);
+        if (resultCode != RESULT_OK || data == null) return;
+
+        if (requestCode == PICK_RAWS) {
+            picked.clear();
+            if (data.getClipData() != null) {
+                for (int i = 0; i < data.getClipData().getItemCount(); i++) {
+                    Uri u = data.getClipData().getItemAt(i).getUri();
+                    grant(u);
+                    picked.add(u);
+                }
+            } else if (data.getData() != null) {
+                grant(data.getData());
+                picked.add(data.getData());
             }
-        } else if (data.getData() != null) {
-            grant(data.getData());
-            picked.add(data.getData());
+            updateFiles();
+            refreshPreview();
+        } else if (requestCode == PICK_ROLL_FOLDER && data.getData() != null) {
+            Uri tree = data.getData();
+            try {
+                getContentResolver().takePersistableUriPermission(tree,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException ignored) {
+                // some providers hand out one-off grants only
+            }
+            Intent roll = new Intent(this, RollActivity.class);
+            roll.putExtra(RollActivity.EXTRA_TREE, tree.toString());
+            startActivityForResult(roll, ROLL_FRAMES);
+        } else if (requestCode == ROLL_FRAMES) {
+            applyRoll(data);
         }
-        filesView.setText(getResources().getQuantityString(R.plurals.frames, picked.size(), picked.size()));
-        developButton.setEnabled(!picked.isEmpty() && filmLabels.length > 0);
+    }
+
+    /** The frames the roll screen handed back, with the roll's own film. */
+    private void applyRoll(Intent data) {
+        ArrayList<String> uris = data.getStringArrayListExtra(RollActivity.EXTRA_FRAMES);
+        if (uris == null || uris.isEmpty()) return;
+        String key = data.getStringExtra(RollActivity.EXTRA_FILM);
+        String roll = data.getStringExtra(RollActivity.EXTRA_ROLL);
+        picked.clear();
+        for (String s : uris) {
+            Uri u = Uri.parse(s);
+            grant(u);
+            picked.add(u);
+        }
+        int idx = indexOfKey(key);
+        if (idx >= 0) {
+            filmIndex = idx;
+            if (!films[idx].group.isEmpty()) currentGroup = films[idx].group;
+        }
+        buildShelf();
+        updateFiles();
+        refreshPreview();
+        log(getString(R.string.roll_added, roll == null ? "" : roll, picked.size()));
     }
 
     /** keeps the read permission across the session */
@@ -235,6 +458,11 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void updateFiles() {
+        filesView.setText(getResources().getQuantityString(R.plurals.frames, picked.size(), picked.size()));
+        developButton.setEnabled(!busy && !picked.isEmpty() && filmIndex >= 0);
+    }
+
     /* ------------------------------------------------------------ developing */
 
     private void developAll() {
@@ -242,20 +470,29 @@ public class MainActivity extends Activity {
             toast(getString(R.string.choose_first));
             return;
         }
-        final int film = filmSpinner.getSelectedItemPosition();
+        if (filmIndex < 0) {
+            toast(getString(R.string.choose_first));
+            return;
+        }
+        final int film = filmIndex;
         final int size = sizeSpinner.getSelectedItemPosition() + 1;      // FOS_SIZE_M, _L
         final boolean stamp = stampSwitch.isChecked();
         final List<Uri> raws = new ArrayList<>(picked);
-        final String filmKey = filmKeys.length > film ? filmKeys[film] : "film";
+        final String filmName = films[film].name;
+        final String filmKey = films[film].key;
 
+        previewSeq.incrementAndGet();     // a preview in flight must not fight for the frame
         setBusy(true);
         progressBar.setProgress(0);
-        log(getString(R.string.developing, raws.size(), filmLabels[film]));
+        log(getString(R.string.developing, raws.size(), films[film].label()));
 
         new Thread(() -> {
             File work = new File(getCacheDir(), "raw");
             if (!work.isDirectory() && !work.mkdirs()) {
-                ui(() -> { log(getString(R.string.engine_failed, "no cache dir")); setBusy(false); });
+                ui(() -> {
+                    log(getString(R.string.engine_failed, "no cache dir"));
+                    setBusy(false);
+                });
                 return;
             }
             int ok = 0, failed = 0;
@@ -279,7 +516,7 @@ public class MainActivity extends Activity {
                     if (r != 0) {
                         failed++;
                         final String err = MfilmNative.lastError();
-                        ui(() -> log("✗ " + name + ": " + err));
+                        ui(() -> log("\u2717 " + name + ": " + err));
                         jpeg.delete();
                         continue;
                     }
@@ -288,11 +525,11 @@ public class MainActivity extends Activity {
                     jpeg.delete();
                     ok++;
                     final String line = getString(R.string.frame_done, name, ms / 1000.0, out);
-                    ui(() -> log("✓ " + line));
+                    ui(() -> log("\u2713 " + line));
                 } catch (Exception e) {
                     failed++;
                     final String err = e.getMessage() == null ? e.toString() : e.getMessage();
-                    ui(() -> log("✗ " + name + ": " + err));
+                    ui(() -> log("\u2717 " + name + ": " + err));
                 }
             }
             final int okf = ok, bad = failed;
@@ -300,10 +537,10 @@ public class MainActivity extends Activity {
             ui(() -> {
                 progressBar.setProgress(100);
                 statusView.setText(getString(R.string.done, okf, bad));
-                log(getString(R.string.done, okf, bad) + " "
-                        + getString(R.string.took, total / 1000.0));
+                log(getString(R.string.done, okf, bad) + " " + getString(R.string.took, total / 1000.0));
                 setBusy(false);
-                if (okf > 0) openGalleryButton(true);
+                if (okf > 0) galleryButton.setVisibility(View.VISIBLE);
+                refreshPreview();
             });
         }).start();
     }
@@ -345,10 +582,6 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             toast(getString(R.string.no_gallery));
         }
-    }
-
-    private void openGalleryButton(boolean on) {
-        galleryButton.setVisibility(on ? View.VISIBLE : View.GONE);
     }
 
     /* ------------------------------------------------------------- plumbing */
@@ -406,14 +639,19 @@ public class MainActivity extends Activity {
         return when.replace("-", "").replace(" ", "_").replace(":", "");
     }
 
-    private void setBusy(boolean busy) {
-        pickButton.setEnabled(!busy);
-        developButton.setEnabled(!busy && !picked.isEmpty() && filmLabels.length > 0);
-        filmSpinner.setEnabled(!busy);
-        sizeSpinner.setEnabled(!busy);
-        stampSwitch.setEnabled(!busy);
-        progressBar.setVisibility(busy ? View.VISIBLE : View.GONE);
-        if (busy) progressBar.setProgress(0);
+    private float dp(float v) {
+        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
+    }
+
+    private void setBusy(boolean on) {
+        busy = on;
+        pickButton.setEnabled(!on);
+        rollButton.setEnabled(!on);
+        developButton.setEnabled(!on && !picked.isEmpty() && filmIndex >= 0);
+        sizeSpinner.setEnabled(!on);
+        stampSwitch.setEnabled(!on);
+        progressBar.setVisibility(on ? View.VISIBLE : View.GONE);
+        if (on) progressBar.setProgress(0);
     }
 
     private void log(String line) {
