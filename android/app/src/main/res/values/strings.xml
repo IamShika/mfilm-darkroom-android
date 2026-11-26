@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">M-Film Darkroom</string>
+    <string name="title">M-FILM</string>
+    <string name="subtitle">darkroom · develop your rolls on the phone</string>
+    <string name="pick">Choose RAW files</string>
+    <string name="no_files">No RAW files chosen.</string>
+    <string name="starting">Starting the darkroom…</string>
+    <string name="film_label">FILM</string>
+    <string name="size_label">PRINT SIZE</string>
+    <string name="stamp">Date stamp in the corner</string>
+    <string name="develop">DEVELOP</string>
+    <string name="open_gallery">Open gallery</string>
+    <string name="version">engine %1$s · the camera\'s own darkroom, GPL-2.0 · tap for licences</string>
+    <string name="version_unknown">engine …</string>
+    <string name="ready">%1$d films on the shelf.</string>
+    <string name="engine_ready">Darkroom ready: %1$d films.</string>
+    <string name="engine_failed">The darkroom didn\'t start: %1$s</string>
+    <string name="choose_first">Choose the RAW files first.</string>
+    <string name="developing">Developing %1$d frame(s) with %2$s…</string>
+    <string name="working">%1$d of %2$d: %3$s</string>
+    <string name="frame_done">%1$s in %2$.1f s → %3$s</string>
+    <string name="done">%1$d developed, %2$d failed.</string>
+    <string name="took">%1$.1f s in all.</string>
+    <string name="no_gallery">No gallery app found.</string>
+    <string name="licences">Licences</string>
+
+    <plurals name="frames">
+        <item quantity="one">%1$d RAW file ready.</item>
+        <item quantity="other">%1$d RAW files ready.</item>
+    </plurals>
+</resources>

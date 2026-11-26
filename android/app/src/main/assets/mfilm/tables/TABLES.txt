@@ -1,0 +1,76 @@
+# file, film stock, made from, SHA-256 (tools/gentables.py)
+# "lut": adapted from a film emulation table by Pat David, CC BY-SA 4.0, and licensed the same
+# (https://creativecommons.org/licenses/by-sa/4.0/). THIRD_PARTY says what was changed.
+# "spektrafilm": derived from spektrafilm by Andrea Volpato, https://github.com/andreavolpato/spektrafilm,
+# CC BY-SA 4.0, and licensed the same; rendered and changed by M-Film (SPEKTRAFILM_CHANGELOG.txt).
+# "look": mixed from M-Film's own film model.
+# "reference": built from a paired shot of the real film, which the film stock is measured against
+# (ml-dev/references).
+LOOK00.LUT  portra400        spektrafilm                                c39c3c00a4e376b9c39fd8c6a3f5baa61bd96513550ee49d8333b04b903536a5
+LOOK01.LUT  cinestill800t    look                                       ae4c8b1c14e357a84343cbc9d5870457c03c4573bf49eb8e23bd66c741099215
+LOOK02.LUT  ektar100         spektrafilm                                228d60e9a47f2c26829df53d8f67eeca99cc21af1d7a4be0bc67e4492f0477b3
+LOOK03.LUT  gold200          spektrafilm                                2b36e9ce67640fb23189b522f2a8f85e029f0189cf21ac9b1841c52c270bea7b
+LOOK04.LUT  superia400       look                                       b484d19a641137207f4676f9f0760075fcf8ff1e4ed87aa994993676097314cd
+LOOK05.LUT  velvia50         look                                       b57c46bec69214737b0d9dd4633f0152ff638c03d20bdca6f65ce4f7ac26b9d0
+LOOK06.LUT  hp5              look                                       0393e4352dc07008ecd6eccf1437cdfa59d3729da4f9abe75b513fe1bb53e8c2
+LOOK07.LUT  trix400          look                                       b9c619584e4de01dda5bec2a98dff3a1ee2547e6873e015e15e4c4baca45eaf3
+LOOK08.LUT  cinestill400t    look (its own LUT is not in films/luts/)   cab13352d2e59250fce0a8ea1a8d1eee3d600384933a04a14f10bd58dcc38cde
+LOOK09.LUT  portra160        spektrafilm                                1f90761ea02e6978c65d61aa55f09f48d457b28dc47ea0f983a472ad83fe196b
+LOOK10.LUT  portra800        spektrafilm                                d7bfdda7b6ded0fc49399077010ec7d21e43f836d9741eb8d5a274de61662052
+LOOK11.LUT  portra160nc      lut                                        829437f507ba3a8af0abd348babb71136e019ab2895b5d178635409670a9fbb5
+LOOK12.LUT  portra160vc      lut                                        f5241aa8c985fbbeb1e2df346231dc91d598318114a0a623f69aa7cfa79114af
+LOOK13.LUT  portra400nc      lut                                        9898b3656ea9e43230c27c36e341fb243e445858f9799c17bdadac5508cf8e72
+LOOK14.LUT  portra400vc      lut                                        d29c37649bf648ee1a3aca49203468be5a71236585f228b4cab9540dc9b3dc4f
+LOOK15.LUT  portra400uc      lut                                        9597a9414554c8cc4812ce727e13545b885417889f18e57b7ddd29a31af5cb88
+LOOK16.LUT  elite200         lut                                        78af96a1ae6fe8bfb84b004e8936c5d54b27986d9dfb213db02d7303bd611362
+LOOK17.LUT  elite400         lut                                        e84734b0e97e6a82fbce0373205d169069ac1c51ee7d280f4b5381aef6f816f2
+LOOK18.LUT  pro160c          lut                                        2d7cd8b9287019febb50afee2d1a926494e044de441f2027abf063460c8a5de0
+LOOK19.LUT  pro400h          spektrafilm                                c6fc0614fc4fa486f21fb4a24fdac08c19be1333b1e991f9136c7a796b83b708
+LOOK20.LUT  pro800z          lut                                        fb6a7d139d3fb707032384912a4b3e8b02878341265911f25a8aa4ba9d5f04b4
+LOOK21.LUT  reala100         lut                                        7d2172925a932a1bd1c97a96a028eeb299d30c51ee02d3b79789206d93840c08
+LOOK22.LUT  superia100       lut                                        1bca6571446577fd137d289c2b7e7c27192e230ca9ac6e1ad12bdd147c2f4aad
+LOOK23.LUT  superia200       lut                                        664734b4ac50bea26b12fbd385df23f97e86ae9d0425937ae907da236f3ab5a6
+LOOK24.LUT  superia800       lut                                        fa708525f1d25c18d994a8be5d78415c2cd59ae5ab04543ee6c6b39143d95100
+LOOK25.LUT  superia1600      lut                                        b02056b8c1ce0cb544cf7948cb7dab8d5f70edb50365918883833bb0853b97e9
+LOOK26.LUT  xtra800          lut                                        f4380c6c43e759176ea002d287a9c500ec5f2665d38e8cf87397898565790332
+LOOK27.LUT  vista200         lut                                        5f9b4c4cc0d737797ee02f7530a9a13c5483348fc1e733ca7e160621cd97cfe1
+LOOK28.LUT  ultra100         lut                                        2787e83a7d8feb59f73a851738449eb0bf7da39caba5686b6895c4fc3aead071
+LOOK29.LUT  redscale100      lut                                        b80b14d1f963668f2ab022f05d3d9c344022f143252bbffeadb874abfb549169
+LOOK30.LUT  velvia100        spektrafilm                                e535b3c3c6ad2c2b2c1e8d5b78fe03696dcc0f6ce86c211da315062bdd3d54d5
+LOOK31.LUT  provia100f       spektrafilm                                228b54341740df29a26f06ec8d79ba40da18911cf44599e047f70702255cce38
+LOOK32.LUT  provia400f       lut                                        3d676cb94a7bfb5abfe8b27b471072abb7c21c0cedd8f67c182060c25d0e7a07
+LOOK33.LUT  provia400x       lut                                        55f27a4578a6d4ac1aed1569b58d7408a98fad50f2738e6480712b4675af744c
+LOOK34.LUT  astia100f        lut                                        62a2ef328c8d5cb076a81b6c8a28a601c0560b2e27ac179d63cd575f6cda282f
+LOOK35.LUT  sensia100        lut                                        ec3905964ef135139c2f82dd2c76f218024819a5271f893d8dcee49132984c13
+LOOK36.LUT  kodachrome25     lut                                        31377e993cd43f380d36216095af594128caad4ffaa5a386d73ea8b35ea4d783
+LOOK37.LUT  kodachrome64     spektrafilm                                f0f54ff622d39e1cd1cab764ef12a794b0a6a57a5f2817e10405862063981f79
+LOOK38.LUT  kodachrome200    lut                                        1cac5756ef2918966b3f3d9236a85fd1dc6eef0cd12bdcbcc51d037a447e77e4
+LOOK39.LUT  e100gx           lut                                        25e468bdbe2540ddf6c2a28fed6e7b423acb47bfd1332c8e77020ad53270957b
+LOOK40.LUT  e100vs           lut                                        3aec0d1bedb1310845fb6d447d2d048eab9dac459cce1215aceec809e2c471a4
+LOOK41.LUT  elitechrome200   lut                                        861be78602e9b0e575e11fc63feb858ac34cf7dc10ee31d59b67be7a8d45104a
+LOOK42.LUT  elitechrome400   lut                                        0c6776e298013381aefd1ddaa5ba23db52f24d08be46f00bc2ed5962861d9dfe
+LOOK43.LUT  extracolor100    lut                                        93e917208ab71243801e9bb646f9462fbcb14c69278745fb80c25976afe0f0ca
+LOOK44.LUT  precisa100       lut                                        5be40ed7dc28b5958e1bb52bc2d22f1b0df4b39c7aacb94cc49bad9749fdf01b
+LOOK45.LUT  elite100xpro     lut                                        fcc97b58c71227af4405ca8b9c14d0c14f36a9ef26c7d254038af81522d1c102
+LOOK46.LUT  superia200xpro   lut                                        b3e04b0b6b351cd0a212ed1ceac00a3bd3f12fa10ce8e3d731682e4cff81835d
+LOOK47.LUT  xproslide200     lut                                        d494ee1d97fd8d59a9005f7337c239974600e32f3a82449b42c717c86ec4da25
+LOOK48.LUT  tmax100          lut                                        9e8f3f0042c1d1179acf8ecfe5e974fabc8c78061c71c9566c9dd8f540322b9c
+LOOK49.LUT  tmax400          lut                                        389ab09e57f7d318e5f8b5fa9437e0e7dbf2b0d0ce15c3b62cbf69fc8167644e
+LOOK50.LUT  tmax3200         lut                                        0dbf09c397f28fdb01569611c51a4e9f7f3e50765ae98b1b955f5848612eed83
+LOOK51.LUT  bw400cn          lut                                        8d1ce8445415a65a1d083e373a470bea8a9b25ecb3ee66acb12cbc0987b930de
+LOOK52.LUT  hie              lut                                        55fc39ddc976789d2b1de33b040e89c816007e892271b71c2608842f279e60d9
+LOOK53.LUT  delta100         lut                                        0dcb8c61046a1e310b580dc9ed9cde41fc75893ab5e383fe4cca44938e17edd3
+LOOK54.LUT  delta400         lut                                        77e4d40cefb3af649c445ce3042c8d443b62aeaf15c3136b8fd15e1a761d474c
+LOOK55.LUT  delta3200        lut                                        331a239a4ab9c5b69b0a55ee56666320bb1d3ba2ebd8e4eda8e56be4a4959a6c
+LOOK56.LUT  fp4              lut                                        206a628b65f030ee4c38a906518e075f865758eadfa7d3b112950aef444a4b85
+LOOK57.LUT  panf50           lut                                        435e6c45034c43d5d29a33798b708da0cf8b130dc606100f22d096088b4ead91
+LOOK58.LUT  hps800           lut                                        ae58a6e67e659475feb1478db63032dcb7d118291739cf775ec8f51daa982f0b
+LOOK59.LUT  xp2              lut                                        45103eea19d26bf447b9befd4c96bd2e364b3ac2155f151cf0adc1035fb47dd4
+LOOK60.LUT  acros100         lut                                        1def50745c3de55e6cc40de406a7c292aff0034ecba0249f7ead7b10694d0b32
+LOOK61.LUT  neopan1600       lut                                        55afa65a561e6e20f9cdd828c56e1d150f9070fd6a3b4788a295bbd2c80cf13c
+LOOK62.LUT  apx25            lut                                        808f9a8e649386b11a7644b8d09e3daa32ec1d7e8a5a926562723c789ddbb4de
+LOOK63.LUT  apx100           lut                                        3a1d760b107f20ba0e208b548c17da25f599f66dd85d864c4fab65f2d62d0463
+LOOK64.LUT  retro80s         lut                                        721ae52a44db38614d6e7afe361c1da20a65e83f6f48c88c35b940bac27d4fd7
+LOOK65.LUT  retro100         lut                                        d6af64b23995834bfd818f849e99df1a1c6f292376f39964d2cf7fd77b44b989
+LOOK66.LUT  ortho25          lut                                        b0b35f97da16cc5cdf31827887b4f520e9b1f2dd9cf9d52d8bfbb1af113fa504
+LOOK67.LUT  ir400            lut                                        295fa1bbf51c195b8ee003f2c0c25140cd8c36a13abdc693ec720497abcd9958

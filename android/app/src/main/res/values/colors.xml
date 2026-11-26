@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="back">#120B0A</color>
+    <color name="panel">#1E1210</color>
+    <color name="paper">#F1DFC0</color>
+    <color name="amber">#E0A33E</color>
+    <color name="dim">#9A7F6B</color>
+</resources>
