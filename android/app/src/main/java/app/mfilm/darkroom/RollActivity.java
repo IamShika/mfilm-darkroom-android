@@ -49,6 +49,7 @@ public class RollActivity extends Activity {
 
     private Uri tree;
     private final Map<String, Uri> docs = new LinkedHashMap<>();   // CR2s in the folder, by lower-case name
+    private final Map<String, String> docNames = new LinkedHashMap<>();  // and the name as the card spells it
     private final List<RollLog> logs = new ArrayList<>();          // every ROLL_NNN.TXT, newest first
     private RollLog current;
     private int rollSeq;                                           // a new roll cancels the one still developing
@@ -113,6 +114,7 @@ public class RollActivity extends Activity {
         try {
             final List<RollLog> found = new ArrayList<>();
             docs.clear();
+            docNames.clear();
 
             Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree,
                     DocumentsContract.getTreeDocumentId(tree));
@@ -132,6 +134,7 @@ public class RollActivity extends Activity {
                     String lower = name.toLowerCase(Locale.US);
                     if (lower.endsWith(".cr2")) {
                         docs.put(lower, doc);
+                        docNames.put(lower, name);
                     } else if (lower.startsWith("roll_") && lower.endsWith(".txt")) {
                         RollLog log = new RollLog();
                         log.name = name;
@@ -156,7 +159,7 @@ public class RollActivity extends Activity {
             for (RollLog log : found) {
                 log.roll = Roll.parse(read(log.doc));
                 for (String file : log.roll.files)
-                    if (docs.containsKey(file.toLowerCase(Locale.US))) log.here++;
+                    if (frameKey(file) != null) log.here++;
             }
 
             /* The newest log is the last roll the camera wrote, but a card can
@@ -210,11 +213,10 @@ public class RollActivity extends Activity {
         title.setText(getString(R.string.roll_title, rollNumber));
 
         for (String file : log.roll.files) {
-            Uri u = docs.get(file.toLowerCase(Locale.US));
-            if (u != null) {
-                frames.add(u);
-                names.add(file);
-            }
+            String key = frameKey(file);
+            if (key == null) continue;
+            frames.add(docs.get(key));
+            names.add(docNames.get(key));
         }
         adapter.notifyDataSetChanged();
 
@@ -257,8 +259,28 @@ public class RollActivity extends Activity {
                 .show();
     }
 
-    /** The engine the darkroom already unpacked, so a roll can show its own look. */
-    private void loadEngine() {
+    /**
+     * The CR2 a log line means: by name first, then by the frame number,
+     * because Canon names its files after the colour space the camera is set
+     * to. In Adobe RGB a frame on the card is _MG_3687.CR2, while the film
+     * module, reading Magic Lantern's file prefix, logs it as IMG_3687.CR2.
+     * The number is the same on both, so that is what a frame is found by.
+     */
+    private String frameKey(String listed) {
+        String base = listed.toLowerCase(Locale.US);
+        int slash = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'));
+        if (slash >= 0) base = base.substring(slash + 1);
+        if (docs.containsKey(base)) return base;
+
+        String want = digitsOf(base).replaceAll("^0+(?=\\d)", "");
+        if (want.isEmpty()) return null;
+        for (String key : docs.keySet()) {
+            if (digitsOf(key).replaceAll("^0+(?=\\d)", "").equals(want)) return key;
+        }
+        return null;
+    }
+
+    /** The engine the darkroom already unpacked, so a roll can show its own look. */    private void loadEngine() {
         File base = new File(getFilesDir(), "mfilm");
         File bin = new File(base, "FOSFILMS.BIN");
         if (!bin.isFile() || filmKey.isEmpty()) return;

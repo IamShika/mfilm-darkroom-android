@@ -73,6 +73,11 @@ folder and the app lists what is in it). It matches each listed frame by name an
 from the `film =` line, so a roll imports with the stock it was shot on instead of whatever was on
 the shelf.
 
+Frames are matched by their **number**, not their whole name: with the camera in Adobe RGB,
+Canon writes `_MG_3687.CR2` while the log records `IMG_3687.CR2` (the module logs Magic Lantern's
+file prefix), and the number is what the two have in common. The sheet shows the name the card
+has.
+
 A card keeps every log it has written, so a folder can hold several `ROLL_NNN.TXT` — some of them
 for rolls whose frames have already been copied off it. The sheet therefore names the log it read
 (in the line under the title) and starts with the newest one that still has frames in the folder.
