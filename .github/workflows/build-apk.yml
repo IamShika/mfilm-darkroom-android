@@ -23,10 +23,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
-      - name: NDK and CMake
-        run: sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
+      # The runner image ships a licensed SDK at $ANDROID_HOME, so only the pieces we
+      # pin are installed here (setup-android@v3 asks for the retired 'tools' package).
+      - name: SDK, NDK and CMake
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
 
       - name: Build the debug APK
         working-directory: android
