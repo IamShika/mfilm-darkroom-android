@@ -48,6 +48,10 @@ public class RollActivity extends Activity {
     static final String EXTRA_ROLL = "app.mfilm.darkroom.roll";
 
     private Uri tree;
+    private final Map<String, Uri> docs = new LinkedHashMap<>();   // CR2s in the folder, by lower-case name
+    private final List<RollLog> logs = new ArrayList<>();          // every ROLL_NNN.TXT, newest first
+    private RollLog current;
+    private int rollSeq;                                           // a new roll cancels the one still developing
     private final List<Uri> frames = new ArrayList<>();
     private final List<String> names = new ArrayList<>();
     private final List<Bitmap> thumbs = new ArrayList<>();
@@ -59,7 +63,7 @@ public class RollActivity extends Activity {
 
     private TextView title, sub, status;
     private ProgressBar bar;
-    private Button add;
+    private Button add, pickLog;
     private GridView grid;
     private RollAdapter adapter;
 
@@ -73,6 +77,7 @@ public class RollActivity extends Activity {
         status = findViewById(R.id.rollStatus);
         bar = findViewById(R.id.rollBar);
         add = findViewById(R.id.rollAdd);
+        pickLog = findViewById(R.id.rollPick);
         grid = findViewById(R.id.grid);
 
         adapter = new RollAdapter();
@@ -90,6 +95,7 @@ public class RollActivity extends Activity {
             updateAdd();
         });
         add.setOnClickListener(v -> finishWith(chosenFrames()));
+        pickLog.setOnClickListener(v -> chooseRoll());
 
         String extra = getIntent().getStringExtra(EXTRA_TREE);
         if (extra == null) {
@@ -105,10 +111,8 @@ public class RollActivity extends Activity {
 
     private void loadRoll() {
         try {
-            Map<String, Uri> byName = new LinkedHashMap<>();
-            Uri rollDoc = null;
-            String rollName = "";
-            long newest = -1;
+            final List<RollLog> found = new ArrayList<>();
+            docs.clear();
 
             Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree,
                     DocumentsContract.getTreeDocumentId(tree));
@@ -127,18 +131,18 @@ public class RollActivity extends Activity {
                     Uri doc = DocumentsContract.buildDocumentUriUsingTree(tree, id);
                     String lower = name.toLowerCase(Locale.US);
                     if (lower.endsWith(".cr2")) {
-                        byName.put(lower, doc);
+                        docs.put(lower, doc);
                     } else if (lower.startsWith("roll_") && lower.endsWith(".txt")) {
-                        if (when >= newest) {
-                            newest = when;
-                            rollDoc = doc;
-                            rollName = name;
-                        }
+                        RollLog log = new RollLog();
+                        log.name = name;
+                        log.doc = doc;
+                        log.when = when;
+                        found.add(log);
                     }
                 }
             }
 
-            if (rollDoc == null) {
+            if (found.isEmpty()) {
                 ui(() -> {
                     sub.setText(getString(R.string.roll_none));
                     status.setText("");
@@ -147,38 +151,28 @@ public class RollActivity extends Activity {
                 return;
             }
 
-            Roll roll = Roll.parse(read(rollDoc));
-            rollNumber = roll.number.isEmpty() ? digitsOf(rollName) : roll.number;
-            filmKey = roll.filmKey;
-
-            for (String file : roll.files) {
-                Uri u = byName.get(file.toLowerCase(Locale.US));
-                if (u != null) {
-                    frames.add(u);
-                    names.add(file);
-                }
-            }
-            if (frames.isEmpty()) {
-                ui(() -> {
-                    sub.setText(getString(R.string.roll_no_frames));
-                    bar.setVisibility(View.GONE);
-                });
-                return;
+            found.sort((a, b) -> a.when != b.when ? Long.compare(b.when, a.when)
+                    : b.name.compareToIgnoreCase(a.name));
+            for (RollLog log : found) {
+                log.roll = Roll.parse(read(log.doc));
+                for (String file : log.roll.files)
+                    if (docs.containsKey(file.toLowerCase(Locale.US))) log.here++;
             }
 
-            loadEngine();
-            for (int i = 0; i < frames.size(); i++) thumbs.add(null);
+            /* The newest log is the last roll the camera wrote, but a card can
+               still hold logs whose frames have been copied off it: start with
+               the newest one that has frames in this very folder, and let the
+               roller pick another from ROLL LOG. */
+            RollLog pick = found.get(0);
+            for (RollLog log : found) if (log.here > 0) { pick = log; break; }
 
-            final String rollLabel = rollName;
+            final RollLog start = pick;
             ui(() -> {
-                String film = filmKey.isEmpty() ? getString(R.string.roll_no_film) : filmKey;
-                title.setText(getString(R.string.roll_title, rollNumber));
-                sub.setText(getString(R.string.roll_sub, film, frames.size(), rollLabel));
-                adapter.notifyDataSetChanged();
-                status.setText(getString(R.string.roll_thumbs, 0, frames.size()));
+                logs.clear();
+                logs.addAll(found);
+                pickLog.setEnabled(logs.size() > 1);
+                applyRoll(start);
             });
-
-            developThumbs();
         } catch (Exception e) {
             final String msg = e.getMessage() == null ? e.toString() : e.getMessage();
             ui(() -> {
@@ -186,6 +180,81 @@ public class RollActivity extends Activity {
                 bar.setVisibility(View.GONE);
             });
         }
+    }
+
+    /** one ROLL_NNN.TXT and what of it this folder has */
+    private static final class RollLog {
+        String name;
+        Uri doc;
+        long when;
+        Roll roll;
+        int here;
+    }
+
+    /** Everything the sheet shows comes from this one log, and it says which. */
+    private void applyRoll(RollLog log) {
+        current = log;
+        frames.clear();
+        names.clear();
+        thumbs.clear();
+        chosen.clear();
+        filmIndex = -1;
+        adapter.notifyDataSetChanged();
+        add.setEnabled(false);
+        add.setText(getString(R.string.roll_add_empty));
+        bar.setVisibility(View.GONE);
+        bar.setProgress(0);
+
+        rollNumber = log.roll.number.isEmpty() ? digitsOf(log.name) : log.roll.number;
+        filmKey = log.roll.filmKey;
+        title.setText(getString(R.string.roll_title, rollNumber));
+
+        for (String file : log.roll.files) {
+            Uri u = docs.get(file.toLowerCase(Locale.US));
+            if (u != null) {
+                frames.add(u);
+                names.add(file);
+            }
+        }
+        adapter.notifyDataSetChanged();
+
+        if (frames.isEmpty()) {
+            sub.setText(getString(R.string.roll_no_frames_in, log.name, log.roll.files.size()));
+            status.setText(logs.size() > 1 ? getString(R.string.roll_switch) : "");
+            return;
+        }
+
+        String film = filmKey.isEmpty() ? getString(R.string.roll_no_film) : filmKey;
+        sub.setText(getString(R.string.roll_sub, film, frames.size(), log.name));
+        for (int i = 0; i < frames.size(); i++) thumbs.add(null);
+        bar.setVisibility(View.VISIBLE);
+        bar.setProgress(0);
+        status.setText(getString(R.string.roll_thumbs, 0, frames.size()));
+
+        final int seq = ++rollSeq;
+        new Thread(() -> {
+            loadEngine();
+            developThumbs(seq);
+        }).start();
+    }
+
+    /** the folder's logs, newest first, with how many of each one's frames are here */
+    private void chooseRoll() {
+        if (logs.isEmpty()) {
+            toast(getString(R.string.roll_none));
+            return;
+        }
+        String[] items = new String[logs.size()];
+        for (int i = 0; i < logs.size(); i++) {
+            RollLog log = logs.get(i);
+            items[i] = getString(R.string.roll_log_entry, log.name, log.roll.files.size(), log.here)
+                    + (log == current ? "  \u2713" : "");
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.roll_choose)
+                .setItems(items, (d, which) -> applyRoll(logs.get(which)))
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 
     /** The engine the darkroom already unpacked, so a roll can show its own look. */
@@ -206,9 +275,11 @@ public class RollActivity extends Activity {
     }
 
     /** One 720 x 480 develop a frame, as the contact sheet's thumbnails. */
-    private void developThumbs() {
+    private void developThumbs(int seq) {
+        if (seq != rollSeq) return;
         if (filmIndex < 0) {
             ui(() -> {
+                if (seq != rollSeq) return;
                 status.setText(getString(R.string.roll_no_film));
                 bar.setVisibility(View.GONE);
             });
@@ -221,6 +292,7 @@ public class RollActivity extends Activity {
         File jpeg = new File(dir, "frame.jpg");
 
         for (int i = 0; i < frames.size(); i++) {
+            if (seq != rollSeq) return;
             final int n = i;
             try {
                 copy(frames.get(i), raw);
@@ -231,6 +303,7 @@ public class RollActivity extends Activity {
                     Bitmap b = decode(jpeg, 480);
                     if (b != null) {
                         ui(() -> {
+                            if (seq != rollSeq || n >= thumbs.size()) return;
                             thumbs.set(n, b);
                             adapter.notifyDataSetChanged();
                         });
@@ -240,12 +313,15 @@ public class RollActivity extends Activity {
                 raw.delete();
             }
             final int done = i + 1;
+            final int total = frames.size();
             ui(() -> {
-                bar.setProgress(done * 100 / frames.size());
-                status.setText(getString(R.string.roll_thumbs, done, frames.size()));
+                if (seq != rollSeq) return;
+                bar.setProgress(done * 100 / total);
+                status.setText(getString(R.string.roll_thumbs, done, total));
             });
         }
         ui(() -> {
+            if (seq != rollSeq) return;
             status.setText(getString(R.string.roll_thumbs_done));
             bar.setVisibility(View.GONE);
         });

@@ -57,7 +57,11 @@
     <string name="roll_no_film">film unknown</string>
     <string name="roll_loading">Reading the roll…</string>
     <string name="roll_none">No ROLL_NNN.TXT in that folder.</string>
-    <string name="roll_no_frames">That roll lists no frames this folder has.</string>
+    <string name="roll_no_frames_in">%1$s lists %2$d frames, and none of them is in this folder.</string>
+    <string name="roll_switch">ROLL LOG has the folder\'s other rolls.</string>
+    <string name="roll_log">Roll log</string>
+    <string name="roll_choose">Which ROLL_NNN.TXT?</string>
+    <string name="roll_log_entry">%1$s · %2$d frames · %3$d here</string>
     <string name="roll_failed">Can\'t read that folder: %1$s</string>
     <string name="roll_thumbs">Developing previews: %1$d of %2$d…</string>
     <string name="roll_thumbs_done">Previews ready.</string>

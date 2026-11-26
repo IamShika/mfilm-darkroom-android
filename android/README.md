@@ -69,9 +69,15 @@ loaded = 2026-11-25 16:07:36
 ```
 
 *Open a roll* asks for that folder (the folder itself, not the text file: Android hands an app a
-folder and the app lists what is in it). The app takes the newest `ROLL_*.TXT`, matches each listed
-frame by name, and sets the film from the `film =` line, so a roll imports with the stock it was
-shot on instead of whatever was on the shelf.
+folder and the app lists what is in it). It matches each listed frame by name and sets the film
+from the `film =` line, so a roll imports with the stock it was shot on instead of whatever was on
+the shelf.
+
+A card keeps every log it has written, so a folder can hold several `ROLL_NNN.TXT` — some of them
+for rolls whose frames have already been copied off it. The sheet therefore names the log it read
+(in the line under the title) and starts with the newest one that still has frames in the folder.
+**ROLL LOG** lists all of them, each with how many frames it lists and how many of those are here,
+so the right roll is one tap away.
 
 ## Build it
 
