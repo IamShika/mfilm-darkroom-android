@@ -2899,8 +2899,8 @@ static void bloom_tint(int style, int warmth, int tint[3], int *reach, int *acro
     {
         case FOS_BLOOM_DIFFUSION:  tint[0] = 255; tint[1] = 253; tint[2] = 248; *reach = 150; *across = 0; *strength = 240; break;
         case FOS_BLOOM_HALATION:   tint[0] = 255; tint[1] = 96;  tint[2] = 58;  *reach = 60;  *across = 0; *strength = 240; break;
-        case FOS_BLOOM_MOTION:     tint[0] = 252; tint[1] = 250; tint[2] = 246; *reach = 110; *across = 1; *strength = 180; break;
-        case FOS_BLOOM_STREAK:     tint[0] = 255; tint[1] = 244; tint[2] = 226; *reach = 180; *across = 1; *strength = 140; break;
+        case FOS_BLOOM_MOTION:     tint[0] = 252; tint[1] = 250; tint[2] = 246; *reach = 110; *across = 1; *strength = 110; break;
+        case FOS_BLOOM_STREAK:     tint[0] = 255; tint[1] = 244; tint[2] = 226; *reach = 180; *across = 1; *strength = 90; break;
         default:                   tint[0] = 255; tint[1] = 247; tint[2] = 238; *reach = 120; *across = 0; *strength = 250; break;
     }
     /* warmth, -100 blue .. 100 amber */
@@ -2962,9 +2962,33 @@ static void bloom_box(uint16_t *p, int w, int h, int radius)
         {
             int a = x - radius < 0 ? 0 : x - radius;
             int b = x + radius + 1 > w ? w : x + radius + 1;
-            tmp[x] = (int) ((long) (run[b] - run[a]) * 256 / (b - a));
+            /* the mean stays in the plane's own 1/256 of a level: eight more
+             * bits would run past 16 and wrap a bright area back to black */
+            tmp[x] = (int) ((run[b] - run[a] + (b - a) / 2) / (b - a));
         }
         for (int x = 0; x < w; x++) r[x] = (uint16_t) tmp[x];
+    }
+}
+
+/* a box blur down the plane: with bloom_box it is the wide average about a
+ * cell, which a broad bright area leaves nothing of */
+static void bloom_box_down(uint16_t *p, int w, int h, int radius)
+{
+    uint32_t run[GH + 1];
+    int tmp[GH];
+    if (radius < 1) radius = 1;
+    if (radius > h / 2) radius = h / 2;
+    for (int x = 0; x < w; x++)
+    {
+        run[0] = 0;
+        for (int y = 0; y < h; y++) run[y + 1] = run[y] + p[y * w + x];
+        for (int y = 0; y < h; y++)
+        {
+            int a = y - radius < 0 ? 0 : y - radius;
+            int b = y + radius + 1 > h ? h : y + radius + 1;
+            tmp[y] = (int) ((run[b] - run[a] + (b - a) / 2) / (b - a));
+        }
+        for (int y = 0; y < h; y++) p[y * w + x] = (uint16_t) tmp[y];
     }
 }
 
@@ -2995,7 +3019,9 @@ static int bloom_build(struct fos_dev *d)
         {
             int l = (p[0] * 54 + p[1] * 183 + p[2] * 19) >> 8;
             int e = l - thr;
-            if (e > 0) row[x >> 2] += e;
+            /* a trail is brightest from the brightest point: the excess is
+             * squared, so a pale grey wall doesn't trail like a street lamp */
+            if (e > 0) row[x >> 2] += across ? e * e / 32 : e;
         }
     }
     for (int i = 0; i < GW * GH; i++)
@@ -3011,16 +3037,45 @@ static int bloom_build(struct fos_dev *d)
     if (across)
     {
         /* motion and streak run along the frame only, a streak much further */
-        int radius = d->bloom_style == FOS_BLOOM_STREAK ? 12 + d->bloom_spread
-                                                        : 3 + d->bloom_spread / 6;
-        bloom_box(d->bloom, GW, GH, radius);
-        bloom_blur(d->bloom, GW, GH, 2, 0, 1, 1);       /* soft above and below it */
+        int len = d->bloom_style == FOS_BLOOM_STREAK ? 12 + d->bloom_spread
+                                                     : 3 + d->bloom_spread / 6;
+        /* A trail starts at a point of light, not at the sky or at the white
+         * wall behind it. Grain is smoothed first, then each cell's wide
+         * average is taken off in both directions: a broad area cancels out
+         * and a point of light stays. Without that the smear is a second,
+         * brighter copy of the scene. */
+        bloom_blur(d->bloom, GW, GH, 2, 1, 1, 1);
+        uint16_t *wide = fos_port_alloc(GW * GH * 2);
+        if (wide)
+        {
+            int hr = 2 + d->bloom_spread / 50;      /* a point's own width, not a wall's */
+            memcpy(wide, d->bloom, GW * GH * 2);
+            bloom_box(wide, GW, GH, hr);
+            bloom_box_down(wide, GW, GH, hr);
+            for (int i = 0; i < GW * GH; i++)
+            {
+                int v = (int) d->bloom[i] - (int) wide[i];
+                d->bloom[i] = (uint16_t) (v > 0 ? v : 0);
+            }
+            fos_port_free(wide);
+        }
+        else memset(d->bloom, 0, GW * GH * 2);   /* no memory: no trail at all */
+        /* A streak is a long, even line with soft ends; motion fades as it
+         * goes. Either way the trail tapers instead of ending in a bar. */
+        int r1 = d->bloom_style == FOS_BLOOM_STREAK ? len / 2 : len / 3;
+        if (r1 < 1) r1 = 1;
+        bloom_box(d->bloom, GW, GH, r1);
+        bloom_box(d->bloom, GW, GH, r1);
+        bloom_box(d->bloom, GW, GH, d->bloom_style == FOS_BLOOM_STREAK ? len / 4 + 1 : r1);
+        /* a streak is a thin line; motion has some height to it */
+        if (d->bloom_style != FOS_BLOOM_STREAK) bloom_blur(d->bloom, GW, GH, 2, 0, 1, 1);
     }
     else bloom_blur(d->bloom, GW, GH, passes, 1, 1, 1);
     /* Spreading light thins it: bring the glow back to the strength of what
      * it was gathered from (up to four times; a dim highlight stays dim),
-     * so Amount 100 is a strong glow and 25 a faint one */
-    int peak = 0, cap = across ? 8 : 4;
+     * so Amount 100 is a strong glow and 25 a faint one. A trail is stretched
+     * far past its point, so it is brought all the way back instead. */
+    int peak = 0, cap = across ? 256 : 4;
     for (int i = 0; i < GW * GH; i++) if (d->bloom[i] > peak) peak = d->bloom[i];
     if (peak > 0)
     {
