@@ -3075,14 +3075,21 @@ static void bloom_at(const struct fos_dev *d, float x, float y, int out[3])
 static void bloom_apply_rows(struct fos_dev *d, int y0, int y1)
 {
     const int W = FOS_PRINT_W;
+    /* a picture sits centred in the print; a frame fills it, or the side of it
+     * a portrait frame uses. The grid is always the whole print, so the rows
+     * are laid by the print's own map, not the picture's */
+    const int x0 = d->image ? d->px0 : d->rows_axis_x ? d->ox0 : 0;
+    const int w = d->image ? d->pw : d->rows_axis_x ? d->ow : W;
+    const int top = d->image ? d->py0 : 0;
+    const int h = d->image ? d->ph : FOS_PRINT_H;
     for (int y = y0; y < y1; y++)
     {
-        if (y < d->py0 || y >= d->py0 + d->ph) continue;
-        uint8_t *p = d->rgb + 3 * (y * W + d->px0);
-        for (int x = 0; x < d->pw; x++, p += 3)
+        if (y < top || y >= top + h) continue;
+        uint8_t *p = d->rgb + 3 * (y * W + x0);
+        for (int x = 0; x < w; x++, p += 3)
         {
             int add[3];
-            bloom_at(d, (float) (d->px0 + x), (float) y, add);
+            bloom_at(d, (float) (x0 + x), (float) y, add);
             for (int c = 0; c < 3; c++) p[c] = (uint8_t) bloom_over(p[c], add[c]);
         }
     }
