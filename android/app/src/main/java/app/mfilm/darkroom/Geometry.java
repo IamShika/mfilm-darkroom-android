@@ -106,25 +106,18 @@ final class Geometry
         byte[] a = bytes(original), b = bytes(encoded);
         try (OutputStream o = new FileOutputStream(out)) {
             o.write(a, 0, Math.min(2, a.length));            // the original's SOI
-            segments(a, 2, o);                                // its APP0..APPn, if any
-            int q = skipSegments(b, 2);                       // past the new file's own
+            int p = segmentEnd(a, 2);                         // its APP0..APPn, if any
+            if (p > 2) o.write(a, 2, p - 2);
+            int q = segmentEnd(b, 2);                         // past the new file's own
             o.write(b, q, b.length - q);                      // its tables and its scan
         }
     }
 
-    /** copies the APP0..APPn segments at `from` to out, and says where they end */
-    private static int segments(byte[] d, int from, OutputStream out) throws IOException {
+    /** where the run of APP0..APPn segments that starts at `from` ends */
+    private static int segmentEnd(byte[] d, int from) {
         int p = from;
-        while (appSegment(d, p)) {
-            int len = ((d[p + 2] & 0xFF) << 8) | (d[p + 3] & 0xFF);
-            if (out != null) out.write(d, p, 2 + len);
-            p += 2 + len;
-        }
+        while (appSegment(d, p)) p += 2 + (((d[p + 2] & 0xFF) << 8) | (d[p + 3] & 0xFF));
         return p;
-    }
-
-    private static int skipSegments(byte[] d, int from) {
-        return segments(d, from, null);
     }
 
     /** the marker at p is an APP0..APPn with a whole segment after it */
