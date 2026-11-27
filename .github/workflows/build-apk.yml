@@ -67,13 +67,13 @@ jobs:
           APK=android/app/build/outputs/apk/release/app-release.apk
           APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
           "$APKSIGNER" verify --print-certs "$APK" | tee "$RUNNER_TEMP/certs.txt"
-          # one signer, and the same certificate every release: 25:5B:C4:...:47:8D
-          SIGNERS=$(grep -c '^Signer #' "$RUNNER_TEMP/certs.txt" || true)
+          # one signer, and the same certificate every release: 25:5B:C4:...:2F:47:8D
+          SIGNERS=$(grep -c 'certificate DN:' "$RUNNER_TEMP/certs.txt" || true)
           if [ "$SIGNERS" != "1" ]; then
             echo "::error::Expected exactly one signer, found $SIGNERS"
             exit 1
           fi
-          grep -q '25:5B:C4:89:60:34:50:8B:68:13:62:4A:4E:BE:11:8E:12:89:7C:FD:A9:13:58:B3:DB:14:10:CD:3B:2F:47:8D' "$RUNNER_TEMP/certs.txt" \
+          grep -q 'certificate SHA-256 digest: 255bc4896034508b6813624a4ebe118e12897cfda91358b3db1410cd3b2f478d' "$RUNNER_TEMP/certs.txt" \
             || { echo "::error::The APK is not signed with the M-Film key."; exit 1; }
 
       - name: Name it
