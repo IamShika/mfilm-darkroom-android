@@ -47,9 +47,21 @@
     <string name="preview_title">PREVIEW · WHAT THE FILM DOES TO THIS FRAME</string>
     <string name="preview_empty">Choose a frame to see the preview.</string>
     <string name="preview_working">Previewing…</string>
-    <string name="preview_ready">preview · %1$s · %2$s · 720 × 480</string>
-    <string name="preview_ready_tap">frame %3$d of %4$d · %2$s · %1$s · tap for the next</string>
+    <string name="preview_ready">preview · %1$s · %2$s · hold to compare</string>
+    <string name="preview_ready_tap">frame %3$d of %4$d · %2$s · %1$s · tap for the next, hold to compare</string>
     <string name="preview_failed">Can\'t preview: %1$s</string>
+
+    <string name="compare_note">without the Shadows and the glow — let go to see the print</string>
+    <string name="presets_title">PRESETS · ONE TAP PUTS THE DARKROOM BACK</string>
+    <string name="preset_save">Save this</string>
+    <string name="preset_hint">Name this darkroom</string>
+    <string name="preset_unnamed">untitled</string>
+    <string name="preset_none">None yet. Set the film and the knobs, then tap Save this.</string>
+    <string name="preset_saved">Saved “%1$s”.</string>
+    <string name="preset_delete">Forget “%1$s”?</string>
+    <string name="preset_applied">%1$s · back on the sliders.</string>
+    <string name="manifest_written">Manifest updated: %1$s</string>
+    <string name="manifest_failed">Can’t write the manifest: %1$s</string>
 
     <string name="chip_iso">ISO</string>
     <string name="chip_process">PROCESS</string>

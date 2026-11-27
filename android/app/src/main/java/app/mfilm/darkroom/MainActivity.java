@@ -3,6 +3,7 @@ package app.mfilm.darkroom;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -16,10 +17,13 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.text.InputType;
 import android.util.TypedValue;
+import android.view.MotionEvent;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -31,12 +35,14 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -58,6 +64,11 @@ public class MainActivity extends Activity {
     private static final int PICK_ROLL_FOLDER = 43;
     private static final int ROLL_FRAMES = 44;
 
+    /* what a roll's folder is called under Pictures/M-Film, and what it records */
+    private static final String MANIFEST = "manifest.csv";
+    private static final String MANIFEST_HEADER =
+            "frame,developed,film,shadows,style,amount,range,spread,warmth,size,stamp,shot,seconds";
+
     private final List<Uri> picked = new ArrayList<>();
     private Uri shared;                      // a frame opened or shared into us
     private Film[] films = new Film[0];
@@ -75,6 +86,24 @@ public class MainActivity extends Activity {
     private ProgressBar progressBar;
     private Button pickButton, developButton, galleryButton, rollButton;
     private LinearLayout adjust;
+    private HistogramView histogram;
+    private SeekBar shadowsBar, amountBar, rangeBar, spreadBar, warmthBar;
+    private Spinner styleSpinner;
+
+    /* the print as the knobs leave it, and the same print without them, held side by side */
+    private Bitmap previewBitmap, plainBitmap;
+    private String plainOf;                  // the frame and film the plain print belongs to
+    private boolean holding;
+    private String heldNote;
+    private long pressedAt;                 // when the finger went down on the preview
+
+    /* the darkrooms kept by name, and the row of them above the sliders */
+    private final List<Preset> presets = new ArrayList<>();
+    private LinearLayout presetRow;
+    private boolean applyingPreset;
+
+    /* the roll the frames came from: its prints go in their own folder */
+    private String rollFolder;
 
     /* the darkroom's knobs, as the phone's sliders leave them */
     private int shadows;
@@ -132,6 +161,8 @@ public class MainActivity extends Activity {
         chips = findViewById(R.id.chips);
         canisterScroll = findViewById(R.id.canisterScroll);
         adjust = findViewById(R.id.adjust);
+        histogram = findViewById(R.id.histogram);
+        loadPresets();
 
         ArrayAdapter<String> sizes = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
                 new String[]{"Medium · a third of the sensor", "Large · half the sensor"});
@@ -147,7 +178,33 @@ public class MainActivity extends Activity {
         stampSwitch.setChecked(prefs.getBoolean("stamp", false));
 
         buildAdjustments();
-        previewImage.setOnClickListener(v -> nextPreview());
+        /*
+         * One gesture on the preview, two things: held down it shows the frame
+         * without the knobs, tapped it goes to the next picked frame. The
+         * listener takes the whole gesture, because a view that doesn't claim
+         * the press never hears the release -- and the release is the print.
+         */
+        previewImage.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    pressedAt = System.currentTimeMillis();
+                    v.setPressed(true);
+                    compare(true);
+                    return true;
+                case MotionEvent.ACTION_UP:
+                    boolean tap = System.currentTimeMillis() - pressedAt < 250;
+                    compare(false);
+                    v.setPressed(false);
+                    if (tap) nextPreview();
+                    return true;
+                case MotionEvent.ACTION_CANCEL:
+                    compare(false);
+                    v.setPressed(false);
+                    return true;
+                default:
+                    return false;
+            }
+        });
         pickButton.setOnClickListener(v -> pickRaws());
         rollButton.setOnClickListener(v -> pickRollFolder());
         developButton.setOnClickListener(v -> developAll());
@@ -155,7 +212,7 @@ public class MainActivity extends Activity {
         versionView.setOnClickListener(v -> showLicences());
         stampSwitch.setOnCheckedChangeListener((b, on) -> {
             prefs.edit().putBoolean("stamp", on).apply();
-            refreshPreview();
+            if (!applyingPreset) refreshPreview();
         });
 
         shared = uriFrom(getIntent());
@@ -419,6 +476,9 @@ public class MainActivity extends Activity {
         final int film = filmIndex;
         final boolean stamp = stampSwitch.isChecked();
         final String filmName = films[film].name;
+        previewBitmap = null;                 // the old frame's prints are not this one's
+        plainBitmap = null;
+        holding = false;
         previewNote.setText(getString(R.string.preview_working));
 
         previews.execute(() -> {
@@ -453,12 +513,19 @@ public class MainActivity extends Activity {
                 }
                 Bitmap b = BitmapFactory.decodeFile(jpeg.getAbsolutePath());
                 if (b == null) return;
+                final int[] bins = histogramOf(b);
+                final Bitmap plain = plainFor(key, film, dir, stamp);
+                final String note = count > 1
+                        ? getString(R.string.preview_ready_tap, filmName, name, at + 1, count)
+                        : getString(R.string.preview_ready, filmName, name);
                 ui(() -> {
                     if (seq != previewSeq.get()) return;
-                    previewImage.setImageBitmap(b);
-                    previewNote.setText(count > 1
-                            ? getString(R.string.preview_ready_tap, filmName, name, at + 1, count)
-                            : getString(R.string.preview_ready, filmName, name));
+                    previewBitmap = b;
+                    plainBitmap = plain;
+                    heldNote = note;
+                    previewImage.setImageBitmap(holding && plain != null ? plain : b);
+                    histogram.setBins(bins);
+                    previewNote.setText(holding ? getString(R.string.compare_note) : note);
                 });
             } catch (Exception e) {
                 final String msg = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -485,6 +552,54 @@ public class MainActivity extends Activity {
             if (MfilmNative.previewOpenImage(px, w, h, film, when, key) != 0) return -1;
         }
         return renderKept(film, stamp, jpeg);
+    }
+
+    /**
+     * The same frame with no Shadows and no glow: the print the knobs work on.
+     * It is rendered once per frame and film, so a held finger only swaps two
+     * bitmaps and never waits for the engine.
+     */
+    private Bitmap plainFor(String key, int film, File dir, boolean stamp) {
+        File out = new File(dir, "plain.jpg");
+        String tag = key + "|" + film + "|" + (stamp ? 1 : 0);
+        if (!tag.equals(plainOf) || !out.isFile()) {
+            if (MfilmNative.previewRender(film, 0, 0, 50, 50, 50, 0, stamp ? 1 : 0,
+                    out.getAbsolutePath()) != 0) {
+                return null;
+            }
+            plainOf = tag;
+        }
+        return BitmapFactory.decodeFile(out.getAbsolutePath());
+    }
+
+    /** the tones the preview came out with: 64 bins of luma, for the bar under it */
+    private static int[] histogramOf(Bitmap b) {
+        int[] bins = new int[64];
+        int w = b.getWidth(), h = b.getHeight();
+        if (w <= 0 || h <= 0) return bins;
+        int[] px = new int[w * h];
+        b.getPixels(px, 0, w, 0, 0, w, h);
+        for (int p : px) {
+            int l = (((p >> 16) & 0xFF) * 77 + ((p >> 8) & 0xFF) * 150 + (p & 0xFF) * 29) >> 8;
+            bins[Math.min(63, Math.max(0, l >> 2))]++;
+        }
+        return bins;
+    }
+
+    /** Press and hold the preview: the same frame with the knobs taken off. */
+    private void compare(boolean on) {
+        if (on) {
+            if (holding || plainBitmap == null || previewBitmap == null) return;
+            holding = true;
+            heldNote = previewNote.getText().toString();
+            previewImage.setImageBitmap(plainBitmap);
+            previewNote.setText(getString(R.string.compare_note));
+        } else {
+            if (!holding) return;
+            holding = false;
+            previewImage.setImageBitmap(previewBitmap);
+            if (heldNote != null) previewNote.setText(heldNote);
+        }
     }
 
     /** the next picked frame, for the preview: a roll, one film at a time */
@@ -532,20 +647,21 @@ public class MainActivity extends Activity {
      * engine with every preview and every DEVELOP.
      */
     private void buildAdjustments() {
-        addSlider(getString(R.string.shadow), 0, 100, shadows, v -> shadows = v);
+        buildPresets();
+        shadowsBar = addSlider(getString(R.string.shadow), 0, 100, shadows, v -> shadows = v);
         addChoice(getString(R.string.bloom_style),
                 new String[]{ getString(R.string.bloom_off), getString(R.string.bloom_bloom),
                         getString(R.string.bloom_diffusion), getString(R.string.bloom_halation),
                         getString(R.string.bloom_motion), getString(R.string.bloom_streak) },
                 bloomStyle, v -> bloomStyle = v);
-        addSlider(getString(R.string.bloom_amount), 0, 100, bloomAmount, v -> bloomAmount = v);
-        addSlider(getString(R.string.bloom_range), 0, 100, bloomRange, v -> bloomRange = v);
-        addSlider(getString(R.string.bloom_spread), 0, 100, bloomSpread, v -> bloomSpread = v);
-        addSlider(getString(R.string.bloom_warmth), -100, 100, bloomWarmth, v -> bloomWarmth = v);
+        amountBar = addSlider(getString(R.string.bloom_amount), 0, 100, bloomAmount, v -> bloomAmount = v);
+        rangeBar = addSlider(getString(R.string.bloom_range), 0, 100, bloomRange, v -> bloomRange = v);
+        spreadBar = addSlider(getString(R.string.bloom_spread), 0, 100, bloomSpread, v -> bloomSpread = v);
+        warmthBar = addSlider(getString(R.string.bloom_warmth), -100, 100, bloomWarmth, v -> bloomWarmth = v);
     }
 
     /** one slider: its value shown beside its name, and the preview again once the finger is lifted */
-    private void addSlider(String label, int min, int max, int value, IntConsumer set) {
+    private SeekBar addSlider(String label, int min, int max, int value, IntConsumer set) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         TextView head = new TextView(this);
@@ -563,11 +679,16 @@ public class MainActivity extends Activity {
                 head.setText(label + "   " + (v > 0 && min < 0 ? "+" + v : String.valueOf(v)));
             }
             @Override public void onStartTrackingTouch(SeekBar s) { }
-            @Override public void onStopTrackingTouch(SeekBar s) { saveKnobs(); refreshPreview(); }
+            @Override public void onStopTrackingTouch(SeekBar s) {
+                if (applyingPreset) return;
+                saveKnobs();
+                refreshPreview();
+            }
         });
         row.addView(head);
         row.addView(bar);
         adjust.addView(row);
+        return bar;
     }
 
     /** the glow's style: a spinner, as the darkroom's own pages have */
@@ -586,9 +707,11 @@ public class MainActivity extends Activity {
         a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         sp.setAdapter(a);
         sp.setSelection(value);
+        styleSpinner = sp;              // the glow's style is the only choice row there is
         sp.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
                 set.accept(pos);
+                if (applyingPreset) return;
                 saveKnobs();
                 refreshPreview();
             }
@@ -597,6 +720,229 @@ public class MainActivity extends Activity {
         row.addView(head);
         row.addView(sp);
         adjust.addView(row);
+    }
+
+    /* -------------------------------------------------------------- presets */
+
+    /** one darkroom kept by name: the film, every knob, the size and the stamp */
+    private static final class Preset {
+        String name = "", film = "";
+        int shadows, style, amount = 50, range = 50, spread = 50, warmth;
+        int size = 1;
+        boolean stamp;
+
+        String line() {
+            return name + '\t' + film + '\t' + shadows + '\t' + style + '\t' + amount + '\t'
+                    + range + '\t' + spread + '\t' + warmth + '\t' + size + '\t' + (stamp ? 1 : 0);
+        }
+
+        static Preset parse(String line) {
+            String[] p = line.split("\t", -1);
+            if (p.length < 10) return null;
+            Preset s = new Preset();
+            try {
+                s.name = p[0];
+                s.film = p[1];
+                s.shadows = Integer.parseInt(p[2]);
+                s.style = Integer.parseInt(p[3]);
+                s.amount = Integer.parseInt(p[4]);
+                s.range = Integer.parseInt(p[5]);
+                s.spread = Integer.parseInt(p[6]);
+                s.warmth = Integer.parseInt(p[7]);
+                s.size = Integer.parseInt(p[8]);
+                s.stamp = "1".equals(p[9]);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+            return s.name.isEmpty() ? null : s;
+        }
+    }
+
+    /**
+     * The darkrooms kept by name sit above the sliders: a tap puts the film,
+     * every knob, the size and the stamp back where they were, and a long
+     * press forgets the name.
+     */
+    private void buildPresets() {
+        LinearLayout block = new LinearLayout(this);
+        block.setOrientation(LinearLayout.VERTICAL);
+        block.setPadding(0, 0, 0, (int) dp(8));
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(this);
+        title.setText(getString(R.string.presets_title));
+        title.setTextSize(11);
+        title.setLetterSpacing(0.16f);
+        title.setTextColor(0xFFDDBB90);
+        title.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+        head.addView(title);
+
+        Button save = new Button(this);
+        save.setText(getString(R.string.preset_save));
+        save.setTextSize(11);
+        save.setOnClickListener(v -> askPresetName());
+        head.addView(save);
+        block.addView(head);
+
+        presetRow = new LinearLayout(this);
+        presetRow.setOrientation(LinearLayout.HORIZONTAL);
+        presetRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        HorizontalScrollView scroll = new HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.addView(presetRow);
+        block.addView(scroll);
+
+        adjust.addView(block);
+        fillPresetRow();
+    }
+
+    private void fillPresetRow() {
+        if (presetRow == null) return;
+        presetRow.removeAllViews();
+        if (presets.isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText(getString(R.string.preset_none));
+            hint.setTextSize(11);
+            hint.setTextColor(0xFF9A7F6B);
+            hint.setPadding(0, (int) dp(2), 0, (int) dp(2));
+            presetRow.addView(hint);
+            return;
+        }
+        for (Preset p : presets) {
+            TextView chip = new TextView(this);
+            chip.setText(p.name);
+            chip.setTextSize(11);
+            chip.setTextColor(0xFFF1DFC0);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(dp(14));
+            bg.setColor(0x00000000);
+            bg.setStroke(Math.max(1, (int) dp(1)), 0x66DDBB90);
+            chip.setBackground(bg);
+            chip.setPadding((int) dp(11), (int) dp(5), (int) dp(11), (int) dp(5));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.rightMargin = (int) dp(6);
+            chip.setLayoutParams(lp);
+            chip.setOnClickListener(v -> applyPreset(p));
+            chip.setOnLongClickListener(v -> {
+                confirmDelete(p);
+                return true;
+            });
+            presetRow.addView(chip);
+        }
+    }
+
+    private void askPresetName() {
+        if (filmIndex < 0) {
+            toast(getString(R.string.choose_first));
+            return;
+        }
+        EditText input = new EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
+        input.setHint(getString(R.string.preset_hint));
+        input.setText(films[filmIndex].name);
+        input.setSelection(input.getText().length());
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.preset_save)
+                .setView(input)
+                .setPositiveButton(android.R.string.ok, (d, w) -> {
+                    String name = input.getText().toString().trim();
+                    if (name.isEmpty()) name = getString(R.string.preset_unnamed);
+                    if (name.length() > 28) name = name.substring(0, 28);
+                    storePreset(name);
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void storePreset(String name) {
+        Preset p = new Preset();
+        p.name = name;
+        p.film = films[filmIndex].key;
+        p.shadows = shadows;
+        p.style = bloomStyle;
+        p.amount = bloomAmount;
+        p.range = bloomRange;
+        p.spread = bloomSpread;
+        p.warmth = bloomWarmth;
+        p.size = sizeSpinner.getSelectedItemPosition();
+        p.stamp = stampSwitch.isChecked();
+        for (int i = presets.size() - 1; i >= 0; i--) {
+            if (presets.get(i).name.equalsIgnoreCase(name)) presets.remove(i);
+        }
+        presets.add(p);
+        savePresets();
+        fillPresetRow();
+        toast(getString(R.string.preset_saved, name));
+    }
+
+    private void confirmDelete(Preset p) {
+        new AlertDialog.Builder(this)
+                .setTitle(getString(R.string.preset_delete, p.name))
+                .setPositiveButton(android.R.string.ok, (d, w) -> {
+                    presets.remove(p);
+                    savePresets();
+                    fillPresetRow();
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /** everything the name kept, back on the shelf and on the sliders */
+    private void applyPreset(Preset p) {
+        applyingPreset = true;
+        try {
+            int idx = indexOfKey(p.film);
+            if (idx >= 0) {
+                filmIndex = idx;
+                if (!films[idx].group.isEmpty()) currentGroup = films[idx].group;
+                prefs.edit().putString("film", films[idx].key).apply();
+                buildShelf();
+            }
+            shadowsBar.setProgress(clamp(p.shadows, 0, 100));
+            amountBar.setProgress(clamp(p.amount, 0, 100));
+            rangeBar.setProgress(clamp(p.range, 0, 100));
+            spreadBar.setProgress(clamp(p.spread, 0, 100));
+            warmthBar.setProgress(clamp(p.warmth, -100, 100) + 100);
+            styleSpinner.setSelection(clamp(p.style, 0, 5));
+            sizeSpinner.setSelection(clamp(p.size, 0, 1));
+            stampSwitch.setChecked(p.stamp);
+        } finally {
+            applyingPreset = false;
+        }
+        saveKnobs();
+        prefs.edit().putInt("size", sizeSpinner.getSelectedItemPosition())
+                .putBoolean("stamp", stampSwitch.isChecked()).apply();
+        refreshPreview();
+        toast(getString(R.string.preset_applied, p.name));
+    }
+
+    private static int clamp(int v, int lo, int hi) {
+        return v < lo ? lo : (v > hi ? hi : v);
+    }
+
+    private void loadPresets() {
+        presets.clear();
+        String saved = prefs.getString("presets", "");
+        if (saved != null) {
+            for (String line : saved.split("\n")) {
+                if (line.isEmpty()) continue;
+                Preset p = Preset.parse(line);
+                if (p != null) presets.add(p);
+            }
+        }
+    }
+
+    private void savePresets() {
+        StringBuilder sb = new StringBuilder();
+        for (Preset p : presets) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(p.line());
+        }
+        prefs.edit().putString("presets", sb.toString()).apply();
     }
 
     /* -------------------------------------------------------------- picking */
@@ -627,6 +973,7 @@ public class MainActivity extends Activity {
         if (requestCode == PICK_RAWS) {
             picked.clear();
             previewIndex = 0;
+            rollFolder = null;                 // frames picked one by one are no roll
             if (data.getClipData() != null) {
                 for (int i = 0; i < data.getClipData().getItemCount(); i++) {
                     Uri u = data.getClipData().getItemAt(i).getUri();
@@ -661,6 +1008,7 @@ public class MainActivity extends Activity {
         if (uris == null || uris.isEmpty()) return;
         String key = data.getStringExtra(RollActivity.EXTRA_FILM);
         String roll = data.getStringExtra(RollActivity.EXTRA_ROLL);
+        rollFolder = folderFor(roll);          // its prints go in the roll's own folder
         picked.clear();
         previewIndex = 0;
         for (String s : uris) {
@@ -712,6 +1060,7 @@ public class MainActivity extends Activity {
         final List<Uri> raws = new ArrayList<>(picked);
         final String filmName = films[film].name;
         final String filmKey = films[film].key;
+        final String folder = rollFolder;
 
         previewSeq.incrementAndGet();     // a preview in flight must not fight for the frame
         keepAwake(getString(R.string.keep_awake_start, raws.size()), true);
@@ -731,6 +1080,7 @@ public class MainActivity extends Activity {
                 return;
             }
             int ok = 0, failed = 0;
+            final List<String[]> rows = new ArrayList<>();      // what the manifest records
             final long t0 = System.currentTimeMillis();
             for (int i = 0; i < raws.size(); i++) {
                 final int n = i + 1;
@@ -753,15 +1103,32 @@ public class MainActivity extends Activity {
                         continue;
                     }
                     long ms = System.currentTimeMillis() - s0;
-                    String out = save(jpeg, "MFILM_" + stampFile(when) + "_" + filmKey + "_" + base + ".jpg");
+                    String out = save(jpeg, "MFILM_" + stampFile(when) + "_" + filmKey + "_" + base + ".jpg",
+                            folder);
                     jpeg.delete();
                     ok++;
+                    rows.add(new String[]{name, out, filmKey, String.valueOf(shadows),
+                            String.valueOf(bloomStyle), String.valueOf(bloomAmount),
+                            String.valueOf(bloomRange), String.valueOf(bloomSpread),
+                            String.valueOf(bloomWarmth), size == 1 ? "medium" : "large",
+                            stamp ? "yes" : "no", when,
+                            String.format(Locale.US, "%.1f", ms / 1000.0)});
                     final String line = getString(R.string.frame_done, name, ms / 1000.0, out);
                     ui(() -> log("\u2713 " + line));
                 } catch (Exception e) {
                     failed++;
                     final String err = e.getMessage() == null ? e.toString() : e.getMessage();
                     ui(() -> log("\u2717 " + name + ": " + err));
+                }
+            }
+            if (folder != null && !rows.isEmpty()) {
+                try {
+                    appendManifest(folder, rows);
+                    final String where = "Pictures/M-Film/" + folder + "/" + MANIFEST;
+                    ui(() -> log(getString(R.string.manifest_written, where)));
+                } catch (Exception e) {
+                    final String err = e.getMessage() == null ? e.toString() : e.getMessage();
+                    ui(() -> log(getString(R.string.manifest_failed, err)));
                 }
             }
             keepAwake(null, false);
@@ -808,12 +1175,17 @@ public class MainActivity extends Activity {
 
     /* ---------------------------------------------------------------- saving */
 
-    /** Copies the developed JPEG into Pictures/M-Film and returns where it went. */
-    private String save(File jpeg, String name) throws IOException {
+    /**
+     * Copies the developed JPEG into Pictures/M-Film -- or into the roll's own
+     * folder under it -- and returns where it went.
+     */
+    private String save(File jpeg, String name, String folder) throws IOException {
+        String relative = Environment.DIRECTORY_PICTURES + "/M-Film"
+                + (folder == null ? "" : "/" + folder);
         ContentValues v = new ContentValues();
         v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
         v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
-        v.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/M-Film");
+        v.put(MediaStore.Images.Media.RELATIVE_PATH, relative);
         v.put(MediaStore.Images.Media.IS_PENDING, 1);
         ContentResolver cr = getContentResolver();
         Uri uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
@@ -831,7 +1203,91 @@ public class MainActivity extends Activity {
         ContentValues done = new ContentValues();
         done.put(MediaStore.Images.Media.IS_PENDING, 0);
         cr.update(uri, done, null, null);
-        return "Pictures/M-Film/" + name;
+        return relative + "/" + name;
+    }
+
+    /** "ROLL_003" for roll 003: one folder per roll in Pictures/M-Film. */
+    private static String folderFor(String roll) {
+        if (roll == null) return null;
+        String digits = roll.replaceAll("[^0-9A-Za-z]", "");
+        return digits.isEmpty() ? null : "ROLL_" + digits;
+    }
+
+    /**
+     * A roll keeps a manifest.csv beside its prints, one row a frame: which
+     * film, every knob, the size, the stamp and how long it took. Each batch
+     * appends to it, so a roll developed over two evenings is one file.
+     */
+    private void appendManifest(String folder, List<String[]> rows) throws IOException {
+        ContentResolver cr = getContentResolver();
+        Uri collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+        String relative = Environment.DIRECTORY_PICTURES + "/M-Film/" + folder;
+        Uri existing = findFile(cr, collection, relative, MANIFEST);
+
+        StringBuilder sb = new StringBuilder();
+        if (existing == null) {
+            sb.append(MANIFEST_HEADER).append('\n');
+        } else {
+            String old = readText(cr, existing);
+            sb.append(old);
+            if (!old.isEmpty() && !old.endsWith("\n")) sb.append('\n');
+        }
+        for (String[] row : rows) sb.append(csv(row)).append('\n');
+
+        if (existing == null) {
+            ContentValues v = new ContentValues();
+            v.put(MediaStore.MediaColumns.DISPLAY_NAME, MANIFEST);
+            v.put(MediaStore.MediaColumns.MIME_TYPE, "text/csv");
+            v.put(MediaStore.MediaColumns.RELATIVE_PATH, relative);
+            v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            existing = cr.insert(collection, v);
+            if (existing == null) throw new IOException("MediaStore refused " + MANIFEST);
+        }
+        try (OutputStream out = cr.openOutputStream(existing, "wt")) {
+            if (out == null) throw new IOException("can't write " + MANIFEST);
+            out.write(sb.toString().getBytes(StandardCharsets.UTF_8));
+        }
+        ContentValues done = new ContentValues();
+        done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+        cr.update(existing, done, null, null);
+    }
+
+    private Uri findFile(ContentResolver cr, Uri collection, String relative, String name) {
+        String[] where = {relative + "/", relative, name};
+        try (Cursor c = cr.query(collection, new String[]{MediaStore.MediaColumns._ID},
+                MediaStore.MediaColumns.RELATIVE_PATH + " IN (?, ?) AND "
+                        + MediaStore.MediaColumns.DISPLAY_NAME + " = ?", where, null)) {
+            if (c != null && c.moveToFirst()) return ContentUris.withAppendedId(collection, c.getLong(0));
+        } catch (Exception ignored) {
+            // a provider that won't answer: the manifest is written afresh
+        }
+        return null;
+    }
+
+    private String readText(ContentResolver cr, Uri uri) throws IOException {
+        try (InputStream in = cr.openInputStream(uri)) {
+            if (in == null) return "";
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return out.toString("UTF-8");
+        }
+    }
+
+    /** one CSV line, quoting whatever would break a column */
+    private static String csv(String[] row) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < row.length; i++) {
+            if (i > 0) sb.append(',');
+            String cell = row[i] == null ? "" : row[i];
+            if (cell.indexOf(',') >= 0 || cell.indexOf('"') >= 0 || cell.indexOf('\n') >= 0) {
+                sb.append('"').append(cell.replace("\"", "\"\"")).append('"');
+            } else {
+                sb.append(cell);
+            }
+        }
+        return sb.toString();
     }
 
     private void openGallery() {

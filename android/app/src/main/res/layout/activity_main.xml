@@ -61,6 +61,13 @@
                 android:text="@string/preview_empty"
                 android:textColor="@color/dim"
                 android:textSize="11sp" />
+
+            <!-- what the frame's tones are doing, for the knobs to answer -->
+            <app.mfilm.darkroom.HistogramView
+                android:id="@+id/histogram"
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:layout_marginTop="6dp" />
         </LinearLayout>
 
         <!-- the film shelf, as the camera shows it -->

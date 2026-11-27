@@ -29,7 +29,14 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
   Diffusion, Halation, Motion and Streak — each with Amount, Range (how far down the tones it is
   gathered from), Spread (how far it reaches) and Warmth (its tint). They start at 50, 50, 50, 0
   and Off; every preview and every DEVELOP goes through the values on screen
-* develop into `Pictures/M-Film`, JPEG with the film in its EXIF
+* **keep a darkroom by name**: *Save this*, above the sliders, stores the film, every knob, the
+  print size and the stamp under a name; one tap later puts all of it back, a long press forgets it
+* **before and after in the hand**: hold the preview to see the same frame with the Shadows and the
+  glow taken off, let go for the print; the bar under it is the frame's histogram, its clipped ends
+  marked in red
+* develop into `Pictures/M-Film`, JPEG with the film in its EXIF — a roll's prints go into their
+  own `Pictures/M-Film/ROLL_NNN`, and every batch adds its frames to a `manifest.csv` beside them
+  (the film, every knob, the size, the stamp, the time and the file it wrote)
 * **come back to where you were**: the film, the Shadows and Glow values, the print size, the date
   stamp and the frames picked last time are kept, so a roll shot on Gold 200 opens on Gold 200
   with its trail values where you left them
@@ -102,12 +109,29 @@ Locally, with JDK 17 and the Android SDK (`platforms;android-34`, `build-tools;3
 
 ```sh
 cd android
-./gradlew assembleDebug
-# app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleRelease
+# app/build/outputs/apk/release/app-release.apk
 ```
 
-It is a debug build, signed with the debug key: Android will ask to allow installing from this
-source, and that is enough to use it. For a Play Store build you would add your own signing config.
+**The APK is signed with one key, and it has to be.** Android refuses to install an update whose
+signature changed; a debug build is signed with a key the build machine makes up, so every CI run
+would hand out an APK the phone treats as a different app, and the old one has to be uninstalled
+first. The key therefore lives in the repository's secrets and nowhere else:
+
+| Secret | What it is |
+| `MFILM_KEYSTORE_BASE64` | the PKCS#12 keystore, base64 |
+| `MFILM_STORE_PASSWORD` | its password (the key's is the same) |
+| `MFILM_KEY_ALIAS` | `mfilm` |
+
+The workflow writes the keystore out of them, builds with them set as `MFILM_KEYSTORE`,
+`MFILM_STORE_PASSWORD` and `MFILM_KEY_ALIAS`, and then checks the finished APK's certificate:
+`apksigner verify --print-certs` must show the one signer, `25:5B:C4:…:2F:47:8D`. Without the
+secrets it fails rather than ship an APK the phone can't update over.
+
+Builds from **1.2.6** on carry that key. The 1.2.5 APK and earlier were debug-signed with a key made
+up on each run, so installing 1.2.6 over one of those means uninstalling it first — copy the prints
+out of `Pictures/M-Film` before that, because Android removes the files an app created when the app
+goes.
 
 ## How it works
 
