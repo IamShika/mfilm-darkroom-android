@@ -18,8 +18,41 @@ import java.util.Locale;
  */
 final class PictureLoader {
 
-    /** enough for the biggest print, and what a phone can hold */
-    static final int MAX_SIDE = 2600;
+    /**
+     * The most pixels one picture may bring: developing holds the bitmap, the
+     * ARGB copy taken from it and the engine's RGB copy -- eleven bytes a
+     * pixel -- and turning it upright needs one more bitmap. A 12 MP photo,
+     * the most a phone's camera writes in one frame, fits; a file bigger than
+     * the heap can hold is brought down to this rather than failing.
+     */
+    private static int pixelBudget() {
+        long px = Runtime.getRuntime().maxMemory() / 2 / 11;
+        return (int) Math.max(4L << 20, Math.min(px, 16L << 20));
+    }
+
+    /**
+     * The power-of-two subsample that brings w x h within reach, at most twice
+     * the budget: the decoder only halves, so asking for exactly the budget
+     * would throw away three quarters of a picture a little over it; fit takes
+     * the rest off, one pixel at a time.
+     */
+    private static int sampleSize(int w, int h, int budget) {
+        int sample = 1;
+        while ((long) (w / sample) * (h / sample) > (long) budget * 2) sample *= 2;
+        return sample;
+    }
+
+    /** the picture at its own size when the budget holds it, smaller when not */
+    private static Bitmap fit(Bitmap b, int budget) {
+        if (b == null) return null;
+        long px = (long) b.getWidth() * b.getHeight();
+        if (px <= budget) return b;
+        double k = Math.sqrt((double) budget / px);
+        Bitmap small = Bitmap.createScaledBitmap(b, Math.max(1, (int) (b.getWidth() * k)),
+                Math.max(1, (int) (b.getHeight() * k)), true);
+        if (small != b) b.recycle();
+        return small;
+    }
 
     /** the RAWs other makes write: TIFF, or the newer boxed ones */
     private static final String[] RAW = {
@@ -43,7 +76,7 @@ final class PictureLoader {
 
     /**
      * The picture in a file: for a RAW, the largest JPEG inside it; for an
-     * image, the image. Upright, and no wider than MAX_SIDE.
+     * image, the image. Upright, at its own size when the heap holds it.
      */
     static Bitmap load(File file, String name) throws IOException {
         Bitmap b = null;
@@ -59,24 +92,16 @@ final class PictureLoader {
         return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(Locale.US);
     }
 
-    /** the file an image comes from, scaled down to MAX_SIDE */
+    /** the file an image comes from, at its own size (see pixelBudget) */
     private static Bitmap decode(File file) {
         BitmapFactory.Options o = new BitmapFactory.Options();
         o.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(file.getAbsolutePath(), o);
         if (o.outWidth < 1 || o.outHeight < 1) return null;
-        o.inSampleSize = 1;
-        while (Math.max(o.outWidth, o.outHeight) / o.inSampleSize > MAX_SIDE * 2) o.inSampleSize *= 2;
+        int budget = pixelBudget();
+        o.inSampleSize = sampleSize(o.outWidth, o.outHeight, budget);
         o.inJustDecodeBounds = false;
-        Bitmap b = BitmapFactory.decodeFile(file.getAbsolutePath(), o);
-        if (b != null && Math.max(b.getWidth(), b.getHeight()) > MAX_SIDE) {
-            float k = (float) MAX_SIDE / Math.max(b.getWidth(), b.getHeight());
-            Bitmap small = Bitmap.createScaledBitmap(b, Math.max(1, (int) (b.getWidth() * k)),
-                    Math.max(1, (int) (b.getHeight() * k)), true);
-            if (small != b) b.recycle();
-            b = small;
-        }
-        return b;
+        return fit(BitmapFactory.decodeFile(file.getAbsolutePath(), o), budget);
     }
 
     /**
@@ -121,18 +146,10 @@ final class PictureLoader {
             o.inJustDecodeBounds = true;
             BitmapFactory.decodeByteArray(data, 0, data.length, o);
             if (o.outWidth < 1 || o.outHeight < 1) return null;
-            o.inSampleSize = 1;
-            while (Math.max(o.outWidth, o.outHeight) / o.inSampleSize > MAX_SIDE * 2) o.inSampleSize *= 2;
+            int budget = pixelBudget();
+            o.inSampleSize = sampleSize(o.outWidth, o.outHeight, budget);
             o.inJustDecodeBounds = false;
-            Bitmap b = BitmapFactory.decodeByteArray(data, 0, data.length, o);
-            if (b != null && Math.max(b.getWidth(), b.getHeight()) > MAX_SIDE) {
-                float k = (float) MAX_SIDE / Math.max(b.getWidth(), b.getHeight());
-                Bitmap small = Bitmap.createScaledBitmap(b, Math.max(1, (int) (b.getWidth() * k)),
-                        Math.max(1, (int) (b.getHeight() * k)), true);
-                if (small != b) b.recycle();
-                b = small;
-            }
-            return b;
+            return fit(BitmapFactory.decodeByteArray(data, 0, data.length, o), budget);
         } catch (Exception e) {
             return null;
         }

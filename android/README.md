@@ -64,7 +64,9 @@ from the picture it carries:
 the engine's own either way.
 
 Printed sizes for a picture are its own: Large is half its width and Medium a third (and never
-smaller than the screen's print).
+smaller than the screen's print). The picture is decoded at its own size -- a 12 MP phone photo
+develops from all twelve million pixels, so its Large print is 2000 × 1500 -- and only a file too
+big for the phone's heap is brought down first.
 
 ## The roll log
 
