@@ -229,6 +229,13 @@
             android:text="@string/open_gallery"
             android:visibility="gone" />
 
+        <Button
+            android:id="@+id/share"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/share"
+            android:visibility="gone" />
+
         <ScrollView
             android:layout_width="match_parent"
             android:layout_height="200dp"

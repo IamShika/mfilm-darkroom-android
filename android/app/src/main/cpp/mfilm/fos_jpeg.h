@@ -3,12 +3,23 @@
 
 #include <stdint.h>
 
-/* what goes into the JPEG's EXIF (any may be NULL) */
+/* what goes into the JPEG's EXIF (any may be NULL, or 0) */
 struct fos_jpeg_meta
 {
     const char *when;           /* "2026-10-22 17:45" */
     const char *desc;           /* the film */
     const char *fstop;          /* "2.8" */
+
+    /* carried over from the frame's own EXIF, so a developed print still says
+     * what camera, lens and exposure it was shot with (a picture: all empty) */
+    const char *shot;           /* "2026-10-22 17:45:08", when the frame was shot */
+    const char *make;           /* "Canon" */
+    const char *model;          /* "Canon EOS 5D Mark II" */
+    const char *lens;           /* "EF50mm f/1.8 STM" */
+    int iso;                    /* 400 */
+    int shutter_n, shutter_d;   /* 1/125 as 1 and 125 */
+    int focal_n, focal_d;       /* 50 mm as 50 and 1 */
+    int f_n, f_d;               /* the lens's f-number as 28 and 10, when fstop is empty */
 };
 
 /* width x height RGB pixels (rows stride bytes apart) as a baseline JPEG

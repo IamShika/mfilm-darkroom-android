@@ -12,6 +12,9 @@
     <string name="stamp">Date stamp in the corner</string>
     <string name="develop">DEVELOP</string>
     <string name="open_gallery">Open gallery</string>
+    <string name="share">Share the print</string>
+    <string name="share_print">Share the print</string>
+    <string name="share_nothing">Develop a frame first.</string>
     <string name="version">engine %1$s · the camera\'s own darkroom, GPL-2.0 · tap for licences</string>
     <string name="version_unknown">engine …</string>
     <string name="ready">%1$d films on the shelf.</string>
@@ -50,6 +53,18 @@
     <string name="preview_ready">preview · %1$s · %2$s · hold to compare</string>
     <string name="preview_ready_tap">frame %3$d of %4$d · %2$s · %1$s · tap for the next, hold to compare</string>
     <string name="preview_failed">Can\'t preview: %1$s</string>
+
+    <string name="frame_title">STRAIGHTEN · CROP</string>
+    <string name="frame_straighten">Straighten</string>
+    <string name="frame_crop">Crop</string>
+    <string name="frame_zoom">Zoom</string>
+    <string name="frame_zoom_line">zoom %1$d%%</string>
+    <string name="frame_none">The frame as it is.</string>
+    <string name="shape_whole">Whole frame</string>
+    <string name="shape_square">Square 1:1</string>
+    <string name="shape_portrait">Portrait 4:5</string>
+    <string name="shape_three_two">35 mm 3:2</string>
+    <string name="shape_wide">Wide 16:9</string>
 
     <string name="compare_note">without the Shadows and the glow — let go to see the print</string>
     <string name="presets_title">PRESETS · ONE TAP PUTS THE DARKROOM BACK</string>

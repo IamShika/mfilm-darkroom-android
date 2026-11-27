@@ -191,7 +191,80 @@ static void block(struct jw *w, int32_t *d, int t, int *dc_prev)
 /* ---------------------------------------------------------------- EXIF */
 
 /* a tiny TIFF: IFD0 (description, make, model, software, date) and the
- * EXIF IFD (date taken, f-number) */
+ * EXIF IFD (date taken, exposure, f-number, ISO, focal length, the lens) */
+
+/* the most the APP1 body comes to: two IFDs and the strings they point at */
+#define EXIF_MAX 1024
+
+/* one tag of an IFD: text (type 2), a short (type 3) or a rational (type 5) */
+struct ti { int tag, type; const char *text; unsigned n, d, v; };
+
+static struct ti ti_text(int tag, const char *s)
+{
+    struct ti e; e.tag = tag; e.type = 2; e.text = s; e.n = e.d = e.v = 0;
+    return e;
+}
+
+static struct ti ti_short(int tag, unsigned v)
+{
+    struct ti e; e.tag = tag; e.type = 3; e.text = 0; e.n = e.d = 0; e.v = v;
+    return e;
+}
+
+static struct ti ti_ratio(int tag, unsigned n, unsigned d)
+{
+    struct ti e; e.tag = tag; e.type = 5; e.text = 0; e.n = n; e.d = d; e.v = 0;
+    return e;
+}
+
+/* text cut to what the IFD has room for */
+static const char *ti_clamp(const char *s, char *buf, int size)
+{
+    buf[0] = 0;
+    if (!s || !*s) return buf;
+    int n = (int) strlen(s);
+    if (n > size - 1) n = size - 1;
+    memcpy(buf, s, n);
+    buf[n] = 0;
+    return buf;
+}
+
+/* one entry, and the bytes it points at after the IFDs (p: where the entry
+ * goes, data: where the next out-of-line value goes) */
+static void ti_write(uint8_t *out, int *p, int *data, const struct ti *e)
+{
+    int len = e->type == 2 ? (int) strlen(e->text) + 1 : e->type == 5 ? 8 : 2;
+    unsigned cnt = e->type == 2 ? (unsigned) len : 1;
+    out[(*p)++] = (uint8_t) e->tag; out[(*p)++] = (uint8_t) (e->tag >> 8);
+    out[(*p)++] = (uint8_t) e->type; out[(*p)++] = 0;
+    for (int i = 0; i < 4; i++) out[(*p)++] = (uint8_t) (cnt >> (8 * i));
+    if (e->type == 2 && len <= 4)
+    {
+        memset(out + *p, 0, 4);
+        memcpy(out + *p, e->text, len);
+        *p += 4;
+    }
+    else if (e->type == 3)
+    {
+        for (int i = 0; i < 4; i++) out[(*p)++] = (uint8_t) (e->v >> (8 * i));
+    }
+    else
+    {
+        for (int i = 0; i < 4; i++) out[(*p)++] = (uint8_t) ((unsigned) *data >> (8 * i));
+        if (e->type == 2)
+        {
+            memcpy(out + *data, e->text, len);
+            *data += (len + 1) & ~1;
+        }
+        else
+        {
+            unsigned q[2];
+            q[0] = e->n; q[1] = e->d;
+            for (int i = 0; i < 8; i++) out[(*data)++] = (uint8_t) (q[i >> 2] >> (8 * (i & 3)));
+        }
+    }
+}
+
 /* text for XML: the few characters that can't stand as they are */
 static int xml_text(char *out, int size, const char *s)
 {
@@ -219,9 +292,12 @@ static int xmp(char *out, int size, const char *film)
     return n < size ? n : size - 1;
 }
 
+/* the APP1 body: IFD0 with the film and the camera, then the EXIF IFD with
+ * when the frame was shot and the lens's numbers -- carried over from the
+ * CR2, so a developed print still knows what it was shot with */
 static int exif(uint8_t *out, const struct fos_jpeg_meta *m)
 {
-    char date[20] = "";
+    char date[20] = "", shot[20], buf[4][80];
     if (m->when && strlen(m->when) >= 16)
     {
         /* "2026-10-22 17:45" -> "2026:10:22 17:45:00" */
@@ -229,7 +305,16 @@ static int exif(uint8_t *out, const struct fos_jpeg_meta *m)
         date[4] = date[7] = ':';
         memcpy(date + 16, ":00", 4);
     }
-    int fnum = 0;                               /* x10 */
+    /* when it was shot, as the camera wrote it (TIFF's own format), else the
+     * app's date */
+    if (m->shot && strlen(m->shot) >= 19)
+    {
+        memcpy(shot, m->shot, 19);
+        shot[19] = 0;
+    }
+    else snprintf(shot, sizeof(shot), "%s", date[0] ? date : "                   ");
+
+    int fnum = 0, fden = 10;                    /* the lens's f-number */
     if (m->fstop && *m->fstop)
     {
         const char *s = m->fstop;
@@ -237,43 +322,49 @@ static int exif(uint8_t *out, const struct fos_jpeg_meta *m)
         fnum *= 10;
         if (*s == '.' && s[1] >= '0' && s[1] <= '9') fnum += s[1] - '0';
     }
-    struct { int tag, type; const char *s; } ifd0[] =
+    else if (m->f_n > 0 && m->f_d > 0)
     {
-        { 0x010E, 2, m->desc }, { 0x010F, 2, "Canon" }, { 0x0110, 2, fos_port_model() },
-        { 0x0131, 2, "M-FILM darkroom" }, { 0x0132, 2, date },
-    };
-    const int n0 = 6, n1 = 1 + (fnum > 0);
-    int p = 8, data = 8 + 2 + n0 * 12 + 4 + 2 + n1 * 12 + 4;
+        fnum = m->f_n;
+        fden = m->f_d;
+    }
+
+    const char *desc = ti_clamp(m->desc, buf[0], sizeof(buf[0]));
+    const char *make = ti_clamp(m->make, buf[1], sizeof(buf[1]));
+    const char *model = ti_clamp(m->model, buf[2], sizeof(buf[2]));
+    const char *lens = ti_clamp(m->lens, buf[3], sizeof(buf[3]));
+
+    struct ti ifd0[6], ex[6];
+    int n0 = 0, n1 = 0;
+    ifd0[n0++] = ti_text(0x010E, *desc ? desc : " ");
+    ifd0[n0++] = ti_text(0x010F, *make ? make : "Canon");
+    ifd0[n0++] = ti_text(0x0110, *model ? model : fos_port_model());
+    ifd0[n0++] = ti_text(0x0131, "M-FILM darkroom");
+    ifd0[n0++] = ti_text(0x0132, date[0] ? date : " ");
+    /* the EXIF IFD: tags in ascending order */
+    if (m->shutter_n > 0 && m->shutter_d > 0)
+        ex[n1++] = ti_ratio(0x829A, (unsigned) m->shutter_n, (unsigned) m->shutter_d);
+    if (fnum > 0) ex[n1++] = ti_ratio(0x829D, (unsigned) fnum, (unsigned) fden);
+    if (m->iso > 0) ex[n1++] = ti_short(0x8827, (unsigned) m->iso);
+    ex[n1++] = ti_text(0x9003, shot);
+    if (m->focal_n > 0 && m->focal_d > 0)
+        ex[n1++] = ti_ratio(0x920A, (unsigned) m->focal_n, (unsigned) m->focal_d);
+    if (*lens) ex[n1++] = ti_text(0xA434, lens);
+
+    int p = 8;
+    int exif_at = 8 + 2 + (n0 + 1) * 12 + 4;          /* IFD0, then its pointer */
+    int data = exif_at + 2 + n1 * 12 + 4;
+    if (data > EXIF_MAX) return 0;
     memcpy(out, "II*\0\x08\0\0\0", 8);
-#define W16(v) (out[p] = (uint8_t) (v), out[p + 1] = (uint8_t) ((v) >> 8), p += 2)
-#define W32(v) (W16((v) & 0xFFFF), W16((uint32_t) (v) >> 16))
-    W16(n0);
-    for (int i = 0; i < n0 - 1; i++)
-    {
-        const char *s = ifd0[i].s && *ifd0[i].s ? ifd0[i].s : " ";
-        int len = (int) strlen(s) + 1;
-        W16(ifd0[i].tag); W16(2); W32(len);
-        if (len <= 4) { memset(out + p, 0, 4); memcpy(out + p, s, len); p += 4; }
-        else { W32(data); memcpy(out + data, s, len); data += (len + 1) & ~1; }
-    }
-    int exif_at = 8 + 2 + n0 * 12 + 4;
-    W16(0x8769); W16(4); W32(1); W32(exif_at);
-    W32(0);
-    W16(n1);                                    /* tags in ascending order */
-    if (fnum > 0)
-    {
-        W16(0x829D); W16(5); W32(1); W32(data);
-        int q = data;
-        out[q] = (uint8_t) fnum; out[q + 1] = (uint8_t) (fnum >> 8); out[q + 2] = out[q + 3] = 0;
-        out[q + 4] = 10; out[q + 5] = out[q + 6] = out[q + 7] = 0;
-        data += 8;
-    }
-    W16(0x9003); W16(2); W32(20); W32(data);
-    memcpy(out + data, date[0] ? date : "                   ", 20);
-    data += 20;
-    W32(0);
-#undef W16
-#undef W32
+    out[p++] = (uint8_t) (n0 + 1); out[p++] = 0;
+    for (int i = 0; i < n0; i++) ti_write(out, &p, &data, &ifd0[i]);
+    /* where the EXIF IFD is (LONG, 1) */
+    out[p++] = 0x69; out[p++] = 0x87; out[p++] = 4; out[p++] = 0;
+    out[p++] = 1; out[p++] = 0; out[p++] = 0; out[p++] = 0;
+    for (int i = 0; i < 4; i++) out[p++] = (uint8_t) ((unsigned) exif_at >> (8 * i));
+    for (int i = 0; i < 4; i++) out[p++] = 0;          /* no IFD1 */
+    out[p++] = (uint8_t) n1; out[p++] = 0;
+    for (int i = 0; i < n1; i++) ti_write(out, &p, &data, &ex[i]);
+    for (int i = 0; i < 4; i++) out[p++] = 0;          /* the last IFD */
     return data;
 }
 
@@ -321,13 +412,16 @@ struct fos_jpeg *fos_jpeg_begin(const char *path, int width, int height, int qua
     /* EXIF */
     if (meta)
     {
-        uint8_t ex[512];
+        uint8_t ex[EXIF_MAX];
         memset(ex, 0, sizeof(ex));
         int n = exif(ex, meta);
-        put16(w, 0xFFE1); put16(w, n + 8);
-        static const uint8_t tag[6] = { 'E', 'x', 'i', 'f', 0, 0 };
-        for (int i = 0; i < 6; i++) put8(w, tag[i]);
-        for (int i = 0; i < n; i++) put8(w, ex[i]);
+        if (n > 0)
+        {
+            put16(w, 0xFFE1); put16(w, n + 8);
+            static const uint8_t tag[6] = { 'E', 'x', 'i', 'f', 0, 0 };
+            for (int i = 0; i < 6; i++) put8(w, tag[i]);
+            for (int i = 0; i < n; i++) put8(w, ex[i]);
+        }
         /* XMP: the film as the caption and as keywords, where photo apps
          * (Lightroom, Photos, Bridge) look for them; EXIF's ImageDescription
          * above is the same caption for the ones that read only EXIF */

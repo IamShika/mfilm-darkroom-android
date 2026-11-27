@@ -340,6 +340,10 @@ struct box { int lo[3], hi[3]; long count; };
 struct fos_dev
 {
     char cr2[128], print[128], when[20], fstop[8];
+    /* what the frame's own EXIF says it was shot with (parse_tiff): the app
+     * carries it into the print's EXIF, so a developed frame still knows */
+    char make[40], model[48], lens[64], shot[20];
+    int iso, shutter_n, shutter_d, focal_n, focal_d, fnum_n, fnum_d;
     char jpeg[160];                     /* the full-colour frame as a JPEG too, or "" */
     int film, frame;
     const struct fos_look *look;
@@ -599,6 +603,31 @@ static unsigned tiff_tag(struct fos_dev *d, unsigned ifd, int tag, unsigned *cou
     return 0;
 }
 
+/* an ASCII tag as a string; empty when the file doesn't say */
+static void tiff_text(struct fos_dev *d, unsigned ifd, int tag, char *out, int size)
+{
+    unsigned cnt = 0;
+    out[0] = 0;
+    if (!ifd) return;
+    unsigned o = tiff_tag(d, ifd, tag, &cnt);
+    if (!o || cnt <= 4 || cnt > (unsigned) (size - 1)) return;     /* <= 4: inline */
+    if (!read_at(d, o, out, (int) cnt)) out[0] = 0;
+    else out[cnt] = 0;
+}
+
+/* a RATIONAL tag, as its numerator and denominator: 1/125 as 1 and 125 */
+static void tiff_ratio(struct fos_dev *d, unsigned ifd, int tag, int *n, int *den)
+{
+    uint8_t r[8];
+    *n = *den = 0;
+    if (!ifd) return;
+    unsigned o = tiff_tag(d, ifd, tag, 0);
+    if (!o || !read_at(d, o, r, 8)) return;
+    unsigned a = u32le(r), b = u32le(r + 4);
+    if (!b || a > 0xFFFFFF || b > 0xFFFFFF) return;
+    *n = (int) a; *den = (int) b;
+}
+
 static int parse_tiff(struct fos_dev *d)
 {
     uint8_t h[16];
@@ -613,6 +642,25 @@ static int parse_tiff(struct fos_dev *d)
     unsigned exif = tiff_tag(d, ifd0, 0x8769, 0);
     unsigned mn = exif ? tiff_tag(d, exif, 0x927C, 0) : 0;
     unsigned cnt = 0;
+
+    /* what the frame was shot with: the camera, the lens, the exposure and
+     * when it was taken, for the print's EXIF to carry over */
+    d->iso = 0;
+    d->shutter_n = d->shutter_d = 0;
+    d->focal_n = d->focal_d = 0;
+    d->fnum_n = d->fnum_d = 0;
+    tiff_text(d, ifd0, 0x010F, d->make, sizeof(d->make));
+    tiff_text(d, ifd0, 0x0110, d->model, sizeof(d->model));
+    if (exif)
+    {
+        tiff_text(d, exif, 0x9003, d->shot, sizeof(d->shot));
+        tiff_text(d, exif, 0xA434, d->lens, sizeof(d->lens));
+        unsigned iso = tiff_tag(d, exif, 0x8827, &cnt);
+        if (iso && cnt >= 1 && iso <= 102400) d->iso = (int) iso;
+        tiff_ratio(d, exif, 0x829A, &d->shutter_n, &d->shutter_d);
+        tiff_ratio(d, exif, 0x829D, &d->fnum_n, &d->fnum_d);
+        tiff_ratio(d, exif, 0x920A, &d->focal_n, &d->focal_d);
+    }
     unsigned si = mn ? tiff_tag(d, mn, 0x00E0, &cnt) : 0;
     if (si && cnt >= 13)
     {
@@ -3551,7 +3599,9 @@ static void big_begin(struct fos_dev *d)
     {
         char desc[48];
         snprintf(desc, sizeof(desc), "%s %s", fos_films[d->film].brand, fos_films[d->film].name);
-        struct fos_jpeg_meta m = { d->when, desc, d->fstop };
+        struct fos_jpeg_meta m = { d->when, desc, d->fstop, d->shot, d->make, d->model,
+                                   d->lens, d->iso, d->shutter_n, d->shutter_d,
+                                   d->focal_n, d->focal_d, d->fnum_n, d->fnum_d };
         d->bjpeg = fos_jpeg_begin(d->jpeg, bw, bh, 92, &m);
         if (!d->bjpeg)
         {
@@ -3875,7 +3925,9 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                 int h = d->image ? d->ph : H;
                 char desc[48];
                 snprintf(desc, sizeof(desc), "%s %s", fos_films[d->film].brand, fos_films[d->film].name);
-                struct fos_jpeg_meta m = { d->when, desc, d->fstop };
+                struct fos_jpeg_meta m = { d->when, desc, d->fstop, d->shot, d->make, d->model,
+                                           d->lens, d->iso, d->shutter_n, d->shutter_d,
+                                           d->focal_n, d->focal_d, d->fnum_n, d->fnum_d };
                 if (!fos_jpeg_write(d->jpeg, d->rgb + 3 * ((long) y0 * W + x0), 3 * W, w, h, 92, &m))
                 {
                     char msg[200];

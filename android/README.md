@@ -34,9 +34,18 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
 * **before and after in the hand**: hold the preview to see the same frame with the Shadows and the
   glow taken off, let go for the print; the bar under it is the frame's histogram, its clipped ends
   marked in red
-* develop into `Pictures/M-Film`, JPEG with the film in its EXIF — a roll's prints go into their
-  own `Pictures/M-Film/ROLL_NNN`, and every batch adds its frames to a `manifest.csv` beside them
-  (the film, every knob, the size, the stamp, the time and the file it wrote)
+* **straighten and crop on the preview**: a Straighten slider turns the frame up to 10° either way,
+  a Crop row picks the shape (whole frame, 1:1, 4:5, 3:2 or 16:9) and a Zoom slider tightens it. The
+  preview turns as the finger moves — no develop — and DEVELOP cuts the print to the same window, so
+  what the panel shows is the print that comes out. The crop is the biggest one of that shape that
+  still lies inside the turned frame: no corner of the frame is left as a black wedge
+* develop into `Pictures/M-Film`, JPEG with the film in its EXIF and the frame's own — the camera,
+  the lens, the ISO, the shutter and the focal length the CR2 was shot with go into the print, and
+  its caption (the film) is in the XMP too. A roll's prints go into their own
+  `Pictures/M-Film/ROLL_NNN`, and every batch adds its frames to a `manifest.csv` beside them (the
+  film, every knob, the size, the stamp, the time and the file it wrote)
+* **share the print** — the last print DEVELOP wrote goes to whichever app the phone offers
+  (messages, mail, Drive, a photo editor) from one button under the log
 * **come back to where you were**: the film, the Shadows and Glow values, the print size, the date
   stamp and the frames picked last time are kept, so a roll shot on Gold 200 opens on Gold 200
   with its trail values where you left them

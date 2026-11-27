@@ -29,8 +29,8 @@ android {
         applicationId = "app.mfilm.darkroom"
         minSdk = 29                 // MediaStore needs no storage permission from Android 10
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.2.8"
+        versionCode = 12
+        versionName = "1.2.9"
 
         externalNativeBuild {
             cmake {

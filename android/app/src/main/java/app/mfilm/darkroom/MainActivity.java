@@ -84,7 +84,7 @@ public class MainActivity extends Activity {
     private Spinner sizeSpinner;
     private Switch stampSwitch;
     private ProgressBar progressBar;
-    private Button pickButton, developButton, galleryButton, rollButton;
+    private Button pickButton, developButton, galleryButton, rollButton, shareButton;
     private LinearLayout adjust;
     private HistogramView histogram;
     private SeekBar shadowsBar, amountBar, rangeBar, spreadBar, warmthBar;
@@ -96,6 +96,17 @@ public class MainActivity extends Activity {
     private boolean holding;
     private String heldNote;
     private long pressedAt;                 // when the finger went down on the preview
+
+    /* straighten and crop: the same window on the preview and on the print */
+    private Bitmap framedPreview, framedPlain;
+    private TextView frameNote;
+    private int straighten;                 // tenths of a degree, -100..100
+    private int cropShape;                  // 0: the whole frame
+    private int cropZoom = 100;             // percent of the biggest crop of that shape
+
+    /* the print DEVELOP last wrote, for the share sheet */
+    private volatile Uri lastPrint;
+    private volatile String lastPrintName = "";
 
     /* the darkrooms kept by name, and the row of them above the sliders */
     private final List<Preset> presets = new ArrayList<>();
@@ -139,6 +150,9 @@ public class MainActivity extends Activity {
         bloomRange = prefs.getInt("range", 50);
         bloomSpread = prefs.getInt("spread", 50);
         bloomWarmth = prefs.getInt("warmth", 0);
+        straighten = prefs.getInt("straighten", 0);
+        cropShape = prefs.getInt("shape", 0);
+        cropZoom = prefs.getInt("zoom", 100);
 
         filesView = findViewById(R.id.files);
         logView = findViewById(R.id.log);
@@ -151,6 +165,7 @@ public class MainActivity extends Activity {
         developButton = findViewById(R.id.develop);
         galleryButton = findViewById(R.id.gallery);
         rollButton = findViewById(R.id.roll);
+        shareButton = findViewById(R.id.share);
         previewImage = findViewById(R.id.preview);
         previewNote = findViewById(R.id.previewNote);
         filmBrandView = findViewById(R.id.filmBrand);
@@ -209,6 +224,7 @@ public class MainActivity extends Activity {
         rollButton.setOnClickListener(v -> pickRollFolder());
         developButton.setOnClickListener(v -> developAll());
         galleryButton.setOnClickListener(v -> openGallery());
+        shareButton.setOnClickListener(v -> sharePrint());
         versionView.setOnClickListener(v -> showLicences());
         stampSwitch.setOnCheckedChangeListener((b, on) -> {
             prefs.edit().putBoolean("stamp", on).apply();
@@ -478,6 +494,8 @@ public class MainActivity extends Activity {
         final String filmName = films[film].name;
         previewBitmap = null;                 // the old frame's prints are not this one's
         plainBitmap = null;
+        framedPreview = null;
+        framedPlain = null;
         holding = false;
         previewNote.setText(getString(R.string.preview_working));
 
@@ -513,7 +531,6 @@ public class MainActivity extends Activity {
                 }
                 Bitmap b = BitmapFactory.decodeFile(jpeg.getAbsolutePath());
                 if (b == null) return;
-                final int[] bins = histogramOf(b);
                 final Bitmap plain = plainFor(key, film, dir, stamp);
                 final String note = count > 1
                         ? getString(R.string.preview_ready_tap, filmName, name, at + 1, count)
@@ -523,8 +540,7 @@ public class MainActivity extends Activity {
                     previewBitmap = b;
                     plainBitmap = plain;
                     heldNote = note;
-                    previewImage.setImageBitmap(holding && plain != null ? plain : b);
-                    histogram.setBins(bins);
+                    renderFramed();
                     previewNote.setText(holding ? getString(R.string.compare_note) : note);
                 });
             } catch (Exception e) {
@@ -589,17 +605,162 @@ public class MainActivity extends Activity {
     /** Press and hold the preview: the same frame with the knobs taken off. */
     private void compare(boolean on) {
         if (on) {
-            if (holding || plainBitmap == null || previewBitmap == null) return;
+            if (holding || framedPlain == null || framedPreview == null) return;
             holding = true;
             heldNote = previewNote.getText().toString();
-            previewImage.setImageBitmap(plainBitmap);
+            previewImage.setImageBitmap(framedPlain);
             previewNote.setText(getString(R.string.compare_note));
         } else {
             if (!holding) return;
             holding = false;
-            previewImage.setImageBitmap(previewBitmap);
+            previewImage.setImageBitmap(framedPreview);
             if (heldNote != null) previewNote.setText(heldNote);
         }
+    }
+
+    /* ---------------------------------------------------- straighten · crop */
+
+    /**
+     * The frame turned and cut to the crop, from the bitmaps already in hand:
+     * dragging the angle costs a rotation, not a develop. The print gets the
+     * same window, in Geometry.rewrite, once the engine has written it.
+     */
+    private void renderFramed() {
+        if (previewBitmap == null) {
+            previewImage.setImageDrawable(null);
+            return;
+        }
+        if (Geometry.isSet(straighten, cropShape, cropZoom)) {
+            if (framedPreview != previewBitmap && framedPreview != null) framedPreview.recycle();
+            if (framedPlain != plainBitmap && framedPlain != null) framedPlain.recycle();
+            framedPreview = Geometry.apply(previewBitmap, straighten, cropShape, cropZoom);
+            framedPlain = plainBitmap == null ? null
+                    : Geometry.apply(plainBitmap, straighten, cropShape, cropZoom);
+        } else {
+            framedPreview = previewBitmap;
+            framedPlain = plainBitmap;
+        }
+        previewImage.setImageBitmap(holding && framedPlain != null ? framedPlain : framedPreview);
+        histogram.setBins(histogramOf(framedPreview));
+    }
+
+    /** the crop the phone is on, as the line under its title says */
+    private String shapeName(int shape) {
+        switch (shape) {
+            case 1: return getString(R.string.shape_square);
+            case 2: return getString(R.string.shape_portrait);
+            case 3: return getString(R.string.shape_three_two);
+            case 4: return getString(R.string.shape_wide);
+            default: return getString(R.string.shape_whole);
+        }
+    }
+
+    private String[] shapeNames() {
+        String[] all = new String[Geometry.SHAPES];
+        for (int i = 0; i < all.length; i++) all[i] = shapeName(i);
+        return all;
+    }
+
+    private String frameText() {
+        if (!Geometry.isSet(straighten, cropShape, cropZoom)) return getString(R.string.frame_none);
+        StringBuilder sb = new StringBuilder();
+        if (straighten != 0) sb.append(String.format(Locale.US, "%+.1f\u00B0", straighten / 10.0));
+        if (cropShape > 0) {
+            if (sb.length() > 0) sb.append(" \u00B7 ");
+            sb.append(shapeName(cropShape));
+        }
+        if (cropZoom != 100) {
+            if (sb.length() > 0) sb.append(" \u00B7 ");
+            sb.append(getString(R.string.frame_zoom_line, cropZoom));
+        }
+        return sb.toString();
+    }
+
+    /** the angle or the zoom moved: the preview again, and what it is on the line */
+    private void framePreview() {
+        if (frameNote != null) frameNote.setText(frameText());
+        renderFramed();
+    }
+
+    private void saveFrame() {
+        prefs.edit().putInt("straighten", straighten).putInt("shape", cropShape)
+                .putInt("zoom", cropZoom).apply();
+        framePreview();
+    }
+
+    /**
+     * Straighten and crop, above the presets: one slider for the angle, one
+     * for the shape, one for how tight the crop is. They cost no develop --
+     * the preview's bitmaps are rotated as the finger moves -- and DEVELOP
+     * cuts the print with the same window.
+     */
+    private void buildFrame() {
+        TextView title = new TextView(this);
+        title.setText(getString(R.string.frame_title));
+        title.setTextSize(11);
+        title.setLetterSpacing(0.16f);
+        title.setTextColor(0xFFDDBB90);
+        title.setPadding(0, (int) dp(12), 0, 0);
+        adjust.addView(title);
+
+        frameNote = new TextView(this);
+        frameNote.setTextSize(11);
+        frameNote.setTextColor(0xFF9A7F6B);
+        frameNote.setText(frameText());
+        adjust.addView(frameNote);
+
+        /* the angle, in tenths of a degree */
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        TextView head = new TextView(this);
+        head.setTextSize(11);
+        head.setLetterSpacing(0.06f);
+        head.setTextColor(0xFFDDBB90);
+        SeekBar bar = new SeekBar(this);
+        bar.setMax(200);
+        bar.setProgress(straighten + 100);
+        head.setText(getString(R.string.frame_straighten) + "   "
+                + String.format(Locale.US, "%+.1f\u00B0", straighten / 10.0));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                straighten = p - 100;
+                head.setText(getString(R.string.frame_straighten) + "   "
+                        + String.format(Locale.US, "%+.1f\u00B0", straighten / 10.0));
+                if (fromUser) framePreview();
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) { }
+            @Override public void onStopTrackingTouch(SeekBar s) { saveFrame(); }
+        });
+        row.addView(head);
+        row.addView(bar);
+        adjust.addView(row);
+
+        addChoice(getString(R.string.frame_crop), shapeNames(), cropShape,
+                v -> cropShape = v, this::saveFrame);
+
+        /* how tight the crop is: 100% is as big as the turned frame allows */
+        LinearLayout zrow = new LinearLayout(this);
+        zrow.setOrientation(LinearLayout.VERTICAL);
+        TextView zhead = new TextView(this);
+        zhead.setTextSize(11);
+        zhead.setLetterSpacing(0.06f);
+        zhead.setTextColor(0xFFDDBB90);
+        zhead.setText(getString(R.string.frame_zoom) + "   " + cropZoom + "%");
+        SeekBar zbar = new SeekBar(this);
+        zbar.setMax(100);
+        zbar.setProgress(cropZoom - 100);
+        zbar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean fromUser) {
+                cropZoom = 100 + p;
+                zhead.setText(getString(R.string.frame_zoom) + "   " + cropZoom + "%");
+                if (fromUser) framePreview();
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) { }
+            @Override public void onStopTrackingTouch(SeekBar s) { saveFrame(); }
+        });
+        zrow.addView(zhead);
+        zrow.addView(zbar);
+        adjust.addView(zrow);
     }
 
     /** the next picked frame, for the preview: a roll, one film at a time */
@@ -647,6 +808,7 @@ public class MainActivity extends Activity {
      * engine with every preview and every DEVELOP.
      */
     private void buildAdjustments() {
+        buildFrame();
         buildPresets();
         shadowsBar = addSlider(getString(R.string.shadow), 0, 100, shadows, v -> shadows = v);
         addChoice(getString(R.string.bloom_style),
@@ -662,6 +824,10 @@ public class MainActivity extends Activity {
 
     /** one slider: its value shown beside its name, and the preview again once the finger is lifted */
     private SeekBar addSlider(String label, int min, int max, int value, IntConsumer set) {
+        return addSlider(label, min, max, value, set, this::knobsChanged);
+    }
+
+    private SeekBar addSlider(String label, int min, int max, int value, IntConsumer set, Runnable after) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         TextView head = new TextView(this);
@@ -681,8 +847,7 @@ public class MainActivity extends Activity {
             @Override public void onStartTrackingTouch(SeekBar s) { }
             @Override public void onStopTrackingTouch(SeekBar s) {
                 if (applyingPreset) return;
-                saveKnobs();
-                refreshPreview();
+                after.run();
             }
         });
         row.addView(head);
@@ -691,8 +856,18 @@ public class MainActivity extends Activity {
         return bar;
     }
 
+    /** the knobs moved: kept, and the frame developed again at the new values */
+    private void knobsChanged() {
+        saveKnobs();
+        refreshPreview();
+    }
+
     /** the glow's style: a spinner, as the darkroom's own pages have */
     private void addChoice(String label, String[] choices, int value, IntConsumer set) {
+        addChoice(label, choices, value, set, this::knobsChanged);
+    }
+
+    private void addChoice(String label, String[] choices, int value, IntConsumer set, Runnable after) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -712,8 +887,7 @@ public class MainActivity extends Activity {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
                 set.accept(pos);
                 if (applyingPreset) return;
-                saveKnobs();
-                refreshPreview();
+                after.run();
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
@@ -1057,6 +1231,7 @@ public class MainActivity extends Activity {
         final int film = filmIndex;
         final int size = sizeSpinner.getSelectedItemPosition() + 1;      // FOS_SIZE_M, _L
         final boolean stamp = stampSwitch.isChecked();
+        final int turn = straighten, shape = cropShape, zoom = cropZoom;
         final List<Uri> raws = new ArrayList<>(picked);
         final String filmName = films[film].name;
         final String filmKey = films[film].key;
@@ -1102,6 +1277,8 @@ public class MainActivity extends Activity {
                         jpeg.delete();
                         continue;
                     }
+                    /* the print the preview showed: turned and cut the same way */
+                    if (Geometry.isSet(turn, shape, zoom)) Geometry.rewrite(jpeg, turn, shape, zoom);
                     long ms = System.currentTimeMillis() - s0;
                     String out = save(jpeg, "MFILM_" + stampFile(when) + "_" + filmKey + "_" + base + ".jpg",
                             folder);
@@ -1139,7 +1316,10 @@ public class MainActivity extends Activity {
                 statusView.setText(getString(R.string.done, okf, bad));
                 log(getString(R.string.done, okf, bad) + " " + getString(R.string.took, total / 1000.0));
                 setBusy(false);
-                if (okf > 0) galleryButton.setVisibility(View.VISIBLE);
+                if (okf > 0) {
+                    galleryButton.setVisibility(View.VISIBLE);
+                    shareButton.setVisibility(View.VISIBLE);
+                }
                 refreshPreview();
             });
         }).start();
@@ -1203,6 +1383,8 @@ public class MainActivity extends Activity {
         ContentValues done = new ContentValues();
         done.put(MediaStore.Images.Media.IS_PENDING, 0);
         cr.update(uri, done, null, null);
+        lastPrint = uri;                  // what SHARE THE PRINT hands on
+        lastPrintName = name;
         return relative + "/" + name;
     }
 
@@ -1288,6 +1470,24 @@ public class MainActivity extends Activity {
             }
         }
         return sb.toString();
+    }
+
+    /** The print DEVELOP last wrote, to whichever app the phone offers. */
+    private void sharePrint() {
+        if (lastPrint == null) {
+            toast(getString(R.string.share_nothing));
+            return;
+        }
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("image/jpeg");
+        send.putExtra(Intent.EXTRA_STREAM, lastPrint);
+        if (!lastPrintName.isEmpty()) send.putExtra(Intent.EXTRA_SUBJECT, lastPrintName);
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(Intent.createChooser(send, getString(R.string.share_print)));
+        } catch (Exception e) {
+            toast(getString(R.string.no_gallery));
+        }
     }
 
     private void openGallery() {
