@@ -5,11 +5,13 @@ import android.app.AlertDialog;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
@@ -85,6 +87,13 @@ public class MainActivity extends Activity {
     /* which of the picked frames the preview shows */
     private int previewIndex;
 
+    /* the film, the knobs and the frames the last session left: a roll shot on
+     * Gold 200 stays on Gold 200, and its trail values stay where they were put */
+    private SharedPreferences prefs;
+
+    /* the frame the preview has copied out of its URI (the kept decode is keyed by it) */
+    private String previewFileKey;
+
     /* previews run one at a time; a newer request makes an older one stale */
     private final ExecutorService previews = Executors.newSingleThreadExecutor();
     private final AtomicInteger previewSeq = new AtomicInteger();
@@ -93,6 +102,14 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        prefs = getSharedPreferences("darkroom", MODE_PRIVATE);
+        shadows = prefs.getInt("shadows", 0);
+        bloomStyle = prefs.getInt("style", 0);
+        bloomAmount = prefs.getInt("amount", 50);
+        bloomRange = prefs.getInt("range", 50);
+        bloomSpread = prefs.getInt("spread", 50);
+        bloomWarmth = prefs.getInt("warmth", 0);
 
         filesView = findViewById(R.id.files);
         logView = findViewById(R.id.log);
@@ -120,7 +137,14 @@ public class MainActivity extends Activity {
                 new String[]{"Medium · a third of the sensor", "Large · half the sensor"});
         sizes.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         sizeSpinner.setAdapter(sizes);
-        sizeSpinner.setSelection(1);
+        sizeSpinner.setSelection(Math.max(0, Math.min(1, prefs.getInt("size", 1))));
+        sizeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
+                prefs.edit().putInt("size", pos).apply();
+            }
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
+        });
+        stampSwitch.setChecked(prefs.getBoolean("stamp", false));
 
         buildAdjustments();
         previewImage.setOnClickListener(v -> nextPreview());
@@ -129,9 +153,14 @@ public class MainActivity extends Activity {
         developButton.setOnClickListener(v -> developAll());
         galleryButton.setOnClickListener(v -> openGallery());
         versionView.setOnClickListener(v -> showLicences());
-        stampSwitch.setOnCheckedChangeListener((b, on) -> refreshPreview());
+        stampSwitch.setOnCheckedChangeListener((b, on) -> {
+            prefs.edit().putBoolean("stamp", on).apply();
+            refreshPreview();
+        });
 
         shared = uriFrom(getIntent());
+        restoreFrames();
+        updateFiles();
 
         setBusy(true);
         new Thread(this::prepareEngine).start();
@@ -197,7 +226,8 @@ public class MainActivity extends Activity {
             final String version = MfilmNative.version();
             runOnUiThread(() -> {
                 films = shelf;
-                filmIndex = indexOfKey("portra400");
+                filmIndex = indexOfKey(prefs.getString("film", "portra400"));
+                if (filmIndex < 0) filmIndex = indexOfKey("portra400");
                 if (filmIndex < 0 && films.length > 0) filmIndex = 0;
                 if (filmIndex >= 0 && !films[filmIndex].group.isEmpty()) currentGroup = films[filmIndex].group;
                 versionView.setText(getString(R.string.version, version));
@@ -329,8 +359,42 @@ public class MainActivity extends Activity {
         if (i < 0 || i >= films.length) return;
         filmIndex = i;
         if (!films[i].group.isEmpty()) currentGroup = films[i].group;
+        prefs.edit().putString("film", films[i].key).apply();
         buildShelf();
         refreshPreview();
+    }
+
+    /* ---------------------------------------------------------- the session */
+
+    private void saveKnobs() {
+        prefs.edit().putInt("shadows", shadows).putInt("style", bloomStyle)
+                .putInt("amount", bloomAmount).putInt("range", bloomRange)
+                .putInt("spread", bloomSpread).putInt("warmth", bloomWarmth).apply();
+    }
+
+    /** the frames last session had, if Android still lets us read them */
+    private void restoreFrames() {
+        String saved = prefs.getString("frames", "");
+        if (saved == null || saved.isEmpty()) return;
+        for (String s : saved.split("\n")) {
+            if (s.isEmpty()) continue;
+            try {
+                Uri u = Uri.parse(s);
+                grant(u);
+                if (!picked.contains(u)) picked.add(u);
+            } catch (Exception ignored) {
+                // a frame the card no longer has
+            }
+        }
+    }
+
+    private void saveFrames() {
+        StringBuilder sb = new StringBuilder();
+        for (Uri u : picked) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(u.toString());
+        }
+        prefs.edit().putString("frames", sb.toString()).apply();
     }
 
     /* ------------------------------------------------------------- preview */
@@ -364,8 +428,22 @@ public class MainActivity extends Activity {
                 return;
             }
             File jpeg = new File(dir, "frame.jpg");
+            final String key = src.toString();
+            File work = new File(dir, name);
             try {
-                int r = developOne(src, dir, jpeg, film, 0, stamp, when(lastModified(src)), null);
+                int r;
+                if (!key.equals(previewFileKey) || !work.isFile()) {
+                    copy(src, work);          // once a frame: the decode is kept after this
+                    previewFileKey = key;
+                }
+                if (PictureLoader.isCr2(name)) {
+                    r = MfilmNative.previewOpen(work.getAbsolutePath(), film, when(lastModified(src)), key);
+                    if (r == 0) r = renderKept(film, stamp, jpeg);
+                    if (r != 0) r = developOne(src, dir, jpeg, film, 0, stamp, when(lastModified(src)), null);
+                } else {
+                    r = previewPicture(key, work, name, jpeg, film, stamp, when(lastModified(src)));
+                    if (r != 0) r = developOne(src, dir, jpeg, film, 0, stamp, when(lastModified(src)), null);
+                }
                 if (seq != previewSeq.get()) return;         // a newer frame or film won
                 if (r != 0 || !jpeg.isFile()) {
                     final String err = MfilmNative.lastError();
@@ -387,6 +465,26 @@ public class MainActivity extends Activity {
                 ui(() -> previewNote.setText(getString(R.string.preview_failed, msg)));
             }
         });
+    }
+
+    /** the kept frame with the knobs on screen: seconds of work, not a RAW read */
+    private int renderKept(int film, boolean stamp, File jpeg) {
+        return MfilmNative.previewRender(film, shadows, bloomStyle, bloomAmount, bloomRange,
+                bloomSpread, bloomWarmth, stamp ? 1 : 0, jpeg.getAbsolutePath());
+    }
+
+    /** a picture's preview: its pixels go to the engine once, which keeps them */
+    private int previewPicture(String key, File work, String name, File jpeg, int film,
+                               boolean stamp, String when) throws IOException {
+        if (MfilmNative.previewCached(key) == 0) {
+            Bitmap b = PictureLoader.load(work, name);
+            int w = b.getWidth(), h = b.getHeight();
+            int[] px = new int[w * h];
+            b.getPixels(px, 0, w, 0, 0, w, h);
+            b.recycle();
+            if (MfilmNative.previewOpenImage(px, w, h, film, when, key) != 0) return -1;
+        }
+        return renderKept(film, stamp, jpeg);
     }
 
     /** the next picked frame, for the preview: a roll, one film at a time */
@@ -465,7 +563,7 @@ public class MainActivity extends Activity {
                 head.setText(label + "   " + (v > 0 && min < 0 ? "+" + v : String.valueOf(v)));
             }
             @Override public void onStartTrackingTouch(SeekBar s) { }
-            @Override public void onStopTrackingTouch(SeekBar s) { refreshPreview(); }
+            @Override public void onStopTrackingTouch(SeekBar s) { saveKnobs(); refreshPreview(); }
         });
         row.addView(head);
         row.addView(bar);
@@ -491,6 +589,7 @@ public class MainActivity extends Activity {
         sp.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
                 set.accept(pos);
+                saveKnobs();
                 refreshPreview();
             }
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
@@ -573,6 +672,7 @@ public class MainActivity extends Activity {
         if (idx >= 0) {
             filmIndex = idx;
             if (!films[idx].group.isEmpty()) currentGroup = films[idx].group;
+            prefs.edit().putString("film", films[idx].key).apply();
         }
         buildShelf();
         updateFiles();
@@ -592,6 +692,7 @@ public class MainActivity extends Activity {
     private void updateFiles() {
         filesView.setText(getResources().getQuantityString(R.plurals.frames, picked.size(), picked.size()));
         developButton.setEnabled(!busy && !picked.isEmpty() && filmIndex >= 0);
+        saveFrames();
     }
 
     /* ------------------------------------------------------------ developing */
@@ -613,11 +714,14 @@ public class MainActivity extends Activity {
         final String filmKey = films[film].key;
 
         previewSeq.incrementAndGet();     // a preview in flight must not fight for the frame
+        keepAwake(getString(R.string.keep_awake_start, raws.size()), true);
         setBusy(true);
         progressBar.setProgress(0);
         log(getString(R.string.developing, raws.size(), films[film].label()));
 
         new Thread(() -> {
+            MfilmNative.previewClose();       // the kept frame gives its memory to the batch
+            previewFileKey = null;
             File work = new File(getCacheDir(), "raw");
             if (!work.isDirectory() && !work.mkdirs()) {
                 ui(() -> {
@@ -637,6 +741,7 @@ public class MainActivity extends Activity {
                 try {
                     File jpeg = new File(work, base + ".jpg");
                     ui(() -> statusView.setText(getString(R.string.working, n, raws.size(), name)));
+                    keepAwake(getString(R.string.keep_awake_frame, n, raws.size(), name), false);
                     long s0 = System.currentTimeMillis();
                     int r = developOne(uri, work, jpeg, film, size, stamp, when,
                             p -> runOnUiThread(() -> progressBar.setProgress(p / 10)));
@@ -659,6 +764,7 @@ public class MainActivity extends Activity {
                     ui(() -> log("\u2717 " + name + ": " + err));
                 }
             }
+            keepAwake(null, false);
             final int okf = ok, bad = failed;
             final long total = System.currentTimeMillis() - t0;
             ui(() -> {
@@ -673,6 +779,32 @@ public class MainActivity extends Activity {
     }
 
     private void ui(Runnable r) { runOnUiThread(r); }
+
+    /**
+     * A roll takes minutes, and the person developing it will look at the
+     * gallery meanwhile: a foreground service with a wake lock keeps the batch
+     * running and the screen's timeout out of it. The same service carries the
+     * notification's line as the frames go by.
+     */
+    private void keepAwake(String text, boolean start) {
+        Intent i = new Intent(this, KeepAwakeService.class);
+        if (text == null) {
+            i.setAction(KeepAwakeService.ACTION_STOP);
+        } else {
+            i.setAction(KeepAwakeService.ACTION_START).putExtra(KeepAwakeService.EXTRA_TEXT, text);
+        }
+        try {
+            if (start && Build.VERSION.SDK_INT >= 26) startForegroundService(i);
+            else startService(i);
+        } catch (Exception ignored) {
+            // the batch still runs; only the notification is missing
+        }
+        if (start && Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 7);
+        }
+    }
 
     /* ---------------------------------------------------------------- saving */
 

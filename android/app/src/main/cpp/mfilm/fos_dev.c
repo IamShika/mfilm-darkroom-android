@@ -454,6 +454,11 @@ struct fos_dev
     uint8_t *smask[2];
     int sm_w[2], sm_h[2];
 
+    /* the phone's preview (fos_dev_preview_mode): the frame stays decoded so
+     * the sliders and the film shelf can draw it again in one pass */
+    int keep, preview_only;
+    uint32_t *raw;                      /* the sums as the RAW gave them, for another render */
+
     /* where the time goes, for the log */
     int ms[ST_COUNT], t_mark, t_stage;
 };
@@ -2070,6 +2075,7 @@ void fos_dev_free(struct fos_dev *d)
     fos_port_free(d->sums); fos_port_free(d->glow); fos_port_free(d->rgb); fos_port_free(d->whist);
     fos_port_free(d->bloom);
     fos_port_free(d->hist); fos_port_free(d->inv); fos_port_free(d->err_rows); fos_port_free(d->idx);
+    fos_port_free(d->raw);
     /* stopped in the middle of the big print: what there is of its files is closed */
     if (d->bjpeg) fos_jpeg_end(d->bjpeg);
     if (d->bzoom) fos_port_close(d->bzoom);
@@ -3567,7 +3573,11 @@ static void big_begin(struct fos_dev *d)
             fos_port_log(msg);
         }
     }
-    if (d->stamp) d->smask[1] = stamp_mask(d->when, stamp_scale(bw, bh), &d->sm_w[1], &d->sm_h[1]);
+    if (d->stamp)
+    {
+        fos_port_free(d->smask[1]);
+        d->smask[1] = stamp_mask(d->when, stamp_scale(bw, bh), &d->sm_w[1], &d->sm_h[1]);
+    }
 }
 
 /* a finished row to the print's palette, as dither_rows: for the zoom file */
@@ -3829,14 +3839,15 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                     {
                         /* the date, on the picture (a portrait frame's is the middle of the print) */
                         int pw = d->rows_axis_x ? d->ow : W, px0 = d->rows_axis_x ? d->ox0 : 0;
+                        fos_port_free(d->smask[0]);
                         d->smask[0] = stamp_mask(d->when, stamp_scale(pw, H), &d->sm_w[0], &d->sm_h[0]);
                         for (int y = 0; y < H; y++)
                             stamp_row(d->smask[0], d->sm_w[0], d->sm_h[0], d->rgb + 3 * (y * W + px0), pw, H, y);
                     }
                     make_thumb(d);
-                    fos_port_free(d->sums); d->sums = 0; d->lin = 0;
+                    if (!d->keep) { fos_port_free(d->sums); d->sums = 0; d->lin = 0; }
                     /* the bigger print comes after the palette, which its zoom file is in; it is the JPEG then */
-                    if (!d->big) { fos_port_free(d->glow); d->glow = 0; }
+                    if (!d->big && !d->keep) { fos_port_free(d->glow); d->glow = 0; }
                     if (d->bloom_style) { d->stage = ST_BLOOM; d->row = -1; }
                     else d->stage = d->big ? ST_QUANT : d->jpeg[0] ? ST_JPEG : ST_QUANT;
                 }
@@ -3864,6 +3875,8 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                     snprintf(msg, sizeof(msg), "dev: can't write %s", d->jpeg);
                     fos_port_log(msg);
                 }
+                /* the phone's preview is the same print, stopped before the palette */
+                if (d->preview_only) { d->stage = ST_DONE; return 1000; }
                 d->stage = ST_QUANT;
                 break;
             }
@@ -3950,6 +3963,72 @@ static void raw_of(const struct fos_dev *d, int px, int py, int *rx, int *ry)
     if (d->orient == 8 || d->orient == 3) b = clen - 1 - b;
     *ry = d->crop_t + (int) ((long) (2 * a + 1) * d->crop_h / (2 * rlen));
     *rx = d->crop_l + (int) ((long) (2 * b + 1) * d->crop_w / (2 * clen));
+}
+
+/* ---- the phone's preview: the frame kept decoded, drawn again ----
+ *
+ * The camera develops a frame once; a phone draws the same frame again at
+ * every slider. The RAW is most of the work (progress 0..800), so the phone
+ * keeps it: fos_dev_preview_mode marks the frame, the app steps it to
+ * ST_KEY (or ST_IMAGE for a picture), fos_dev_keep_raw holds the sums the
+ * decode made, and fos_dev_reprint runs the film, the shadows and the glow
+ * again from there. The JPEG is the same one a full develop writes.
+ */
+void fos_dev_preview_mode(struct fos_dev *d, int on)
+{
+    if (!d) return;
+    d->keep = on ? 1 : 0;
+    d->preview_only = on ? 1 : 0;
+}
+
+int fos_dev_prepared(const struct fos_dev *d)
+{
+    if (!d) return 0;
+    if (d->stage == ST_FAIL || d->stage == ST_OPEN || d->stage == ST_DECODE) return 0;
+    return d->image ? d->stage >= ST_IMAGE : d->stage >= ST_KEY;
+}
+
+int fos_dev_keep_raw(struct fos_dev *d)
+{
+    if (!d || !d->sums) return 0;
+    if (!d->raw) d->raw = fos_port_alloc(FOS_PRINT_W * FOS_PRINT_H * 3 * 4);
+    if (!d->raw) return 0;
+    memcpy(d->raw, d->sums, (size_t) FOS_PRINT_W * FOS_PRINT_H * 3 * 4);
+    return 1;
+}
+
+int fos_dev_reprint(struct fos_dev *d, int film)
+{
+    if (!d || !d->keep || !d->sums) return 0;
+    int f = fos_clamp(film, 0, fos_nfilms - 1);
+    d->film = f;
+    d->look = fos_look_of(fos_films[f].key);
+    /* another frame may have brought its own film's table in meanwhile */
+    if (!table_load(d->look, d->film)) return 0;
+    if (d->look->halation > 0 && !d->glow)
+    {
+        d->glow = fos_port_alloc(GW * GH * 4);
+        if (!d->glow) return 0;
+    }
+    if (d->glow) memset(d->glow, 0, GW * GH * 4);
+    fos_port_free(d->bloom);
+    d->bloom = 0;
+    d->bloom_gain = 0;
+    d->bloom_tint[0] = d->bloom_tint[1] = d->bloom_tint[2] = 0;
+    d->err = 0;
+    d->row = 0;
+    if (d->image) d->stage = ST_IMAGE;      /* the picture is already in hand */
+    else
+    {
+        if (!d->raw) return 0;
+        memcpy(d->sums, d->raw, (size_t) FOS_PRINT_W * FOS_PRINT_H * 3 * 4);
+        /* the scanner measures the frame at the exposure it left (setup_colour's
+         * 1.0), not at the one the last render found (#preview) */
+        d->mul[0] = d->mul[1] = d->mul[2] = 4096;
+        d->lin = 0;
+        d->stage = ST_KEY;
+    }
+    return 1;
 }
 
 int fos_dev_preview(const struct fos_dev *d, uint8_t *lum, int w, int h)

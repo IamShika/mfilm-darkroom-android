@@ -34,6 +34,10 @@
     <string name="bloom_spread">Spread</string>
     <string name="bloom_warmth">Warmth</string>
     <string name="working">%1$d of %2$d: %3$s</string>
+    <string name="keep_awake">Developing…</string>
+    <string name="keep_awake_channel">Developing a roll</string>
+    <string name="keep_awake_start">Developing %1$d frame(s) — you can leave the app.</string>
+    <string name="keep_awake_frame">%1$d of %2$d · %3$s</string>
     <string name="frame_done">%1$s in %2$.1f s → %3$s</string>
     <string name="done">%1$d developed, %2$d failed.</string>
     <string name="took">%1$.1f s in all.</string>

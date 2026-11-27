@@ -9,6 +9,7 @@
  */
 
 #include <jni.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,6 +20,10 @@
 #define JNI_FN(name) Java_app_mfilm_darkroom_MfilmNative_##name
 
 static char last_error[512] = "";
+
+/* one frame at a time: the film's table, the grain plate and the preview's
+ * kept decode are all in one darkroom */
+static pthread_mutex_t engine_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* the films from FOSFILMS.BIN, as the camera loads them off its card; the
  * blob has to outlive the films because they point into it */
@@ -175,6 +180,7 @@ JNIEXPORT jint JNICALL JNI_FN(develop)(JNIEnv *env, jclass cls, jstring jcr2, js
         return -1;
     }
     last_error[0] = 0;
+    pthread_mutex_lock(&engine_lock);
 
     /* fos_dev_start wants a print path: the app doesn't keep the camera's
      * palette-indexed screen print, so it goes beside the JPEG and is removed */
@@ -195,6 +201,7 @@ JNIEXPORT jint JNICALL JNI_FN(develop)(JNIEnv *env, jclass cls, jstring jcr2, js
     (*env)->ReleaseStringUTFChars(env, jcr2, cr2);
     (*env)->ReleaseStringUTFChars(env, jout, out);
     if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+    pthread_mutex_unlock(&engine_lock);
     return r;
 }
 
@@ -217,6 +224,7 @@ JNIEXPORT jint JNICALL JNI_FN(developImage)(JNIEnv *env, jclass cls, jintArray j
         return -1;
     }
     last_error[0] = 0;
+    pthread_mutex_lock(&engine_lock);
 
     size_t n = (size_t) pic_w * (size_t) pic_h;
     uint8_t *rgb = malloc(n * 3);
@@ -252,6 +260,7 @@ JNIEXPORT jint JNICALL JNI_FN(developImage)(JNIEnv *env, jclass cls, jintArray j
     free(rgb);
     (*env)->ReleaseStringUTFChars(env, jout, out);
     if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+    pthread_mutex_unlock(&engine_lock);
     return r;
 
 done:
@@ -259,5 +268,218 @@ done:
     free(rgb);
     (*env)->ReleaseStringUTFChars(env, jout, out);
     if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+    pthread_mutex_unlock(&engine_lock);
     return -1;
+}
+
+/* ----------------------------------------------------------- the preview */
+/*
+ * The app draws the frame again at every slider. The RAW is most of a develop,
+ * so one frame is kept decoded here (the engine's own fos_dev_preview_mode),
+ * keyed by the file the app copied out of its content:// URI: the same frame
+ * at the same film or another one reprints without reading the RAW again.
+ */
+static struct fos_dev *pv;
+static char pv_key[512];
+static int pv_image;                    /* the kept frame is a picture, not a CR2 */
+static uint8_t *pv_pixels;              /* its RGB, which the engine points into */
+
+static void pv_drop_locked(void)
+{
+    if (pv) { fos_dev_free(pv); pv = 0; }
+    free(pv_pixels);
+    pv_pixels = 0;
+    pv_image = 0;
+    pv_key[0] = 0;
+}
+
+JNIEXPORT jint JNICALL JNI_FN(previewCached)(JNIEnv *env, jclass cls, jstring jkey)
+{
+    if (!jkey) return 0;
+    const char *key = (*env)->GetStringUTFChars(env, jkey, 0);
+    if (!key) return 0;
+    pthread_mutex_lock(&engine_lock);
+    int have = pv && pv_key[0] && strcmp(pv_key, key) == 0;
+    pthread_mutex_unlock(&engine_lock);
+    (*env)->ReleaseStringUTFChars(env, jkey, key);
+    return have;
+}
+
+/* Decode a CR2 and keep it: 0 when it is ready to reprint. */
+JNIEXPORT jint JNICALL JNI_FN(previewOpen)(JNIEnv *env, jclass cls, jstring jcr2, jint film,
+                                           jstring jwhen, jstring jkey)
+{
+    const char *path = (*env)->GetStringUTFChars(env, jcr2, 0);
+    const char *when = jwhen ? (*env)->GetStringUTFChars(env, jwhen, 0) : 0;
+    const char *key = jkey ? (*env)->GetStringUTFChars(env, jkey, 0) : 0;
+    if (!path || !key)
+    {
+        snprintf(last_error, sizeof(last_error), "bad preview paths");
+        return -1;
+    }
+    pthread_mutex_lock(&engine_lock);
+    if (pv && !pv_image && pv_key[0] && strcmp(pv_key, key) == 0)
+    {
+        pthread_mutex_unlock(&engine_lock);
+        (*env)->ReleaseStringUTFChars(env, jcr2, path);
+        if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+        (*env)->ReleaseStringUTFChars(env, jkey, key);
+        return 0;
+    }
+    pv_drop_locked();
+    struct fos_dev *d = fos_dev_start(path, "", film, 1, when ? when : "", "");
+    if (!d)
+    {
+        snprintf(last_error, sizeof(last_error), "can't start the frame: %s", path);
+        pthread_mutex_unlock(&engine_lock);
+        return -1;
+    }
+    fos_dev_preview_mode(d, 1);
+    int p = 0;
+    while ((p = fos_dev_step(d, 40)) >= 0 && !fos_dev_prepared(d)) { }
+    if (p < 0 || !fos_dev_prepared(d) || !fos_dev_keep_raw(d))
+    {
+        snprintf(last_error, sizeof(last_error), "%s", fos_dev_error(d));
+        fos_dev_free(d);
+        pthread_mutex_unlock(&engine_lock);
+        return -1;
+    }
+    pv = d;
+    pv_image = 0;
+    snprintf(pv_key, sizeof(pv_key), "%s", key);
+    pthread_mutex_unlock(&engine_lock);
+    (*env)->ReleaseStringUTFChars(env, jcr2, path);
+    if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+    if (jkey) (*env)->ReleaseStringUTFChars(env, jkey, key);
+    return 0;
+}
+
+/* The same for a picture: its pixels are ARGB, as Bitmap.getPixels gives them,
+ * and only needed the first time -- the engine keeps its own copy. */
+JNIEXPORT jint JNICALL JNI_FN(previewOpenImage)(JNIEnv *env, jclass cls, jintArray jpixels,
+                                                jint pic_w, jint pic_h, jint film, jstring jwhen,
+                                                jstring jkey)
+{
+    const char *when = jwhen ? (*env)->GetStringUTFChars(env, jwhen, 0) : 0;
+    const char *key = jkey ? (*env)->GetStringUTFChars(env, jkey, 0) : 0;
+    if (!key)
+    {
+        snprintf(last_error, sizeof(last_error), "bad preview key");
+        return -1;
+    }
+    pthread_mutex_lock(&engine_lock);
+    if (pv && pv_image && pv_key[0] && strcmp(pv_key, key) == 0)
+    {
+        pthread_mutex_unlock(&engine_lock);
+        if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+        (*env)->ReleaseStringUTFChars(env, jkey, key);
+        return 0;
+    }
+    if (!jpixels || pic_w < 1 || pic_h < 1)
+    {
+        snprintf(last_error, sizeof(last_error), "the picture wasn't handed over");
+        pthread_mutex_unlock(&engine_lock);
+        return -1;
+    }
+    pv_drop_locked();
+    size_t n = (size_t) pic_w * (size_t) pic_h;
+    uint8_t *rgb = malloc(n * 3);
+    jint *px = (*env)->GetIntArrayElements(env, jpixels, 0);
+    if (!rgb || !px)
+    {
+        free(rgb);
+        if (px) (*env)->ReleaseIntArrayElements(env, jpixels, px, JNI_ABORT);
+        snprintf(last_error, sizeof(last_error), "out of memory for a %d x %d picture", pic_w, pic_h);
+        pthread_mutex_unlock(&engine_lock);
+        return -1;
+    }
+    for (size_t i = 0; i < n; i++)
+    {
+        unsigned v = (unsigned) px[i];
+        rgb[3 * i] = (uint8_t) (v >> 16 & 255);
+        rgb[3 * i + 1] = (uint8_t) (v >> 8 & 255);
+        rgb[3 * i + 2] = (uint8_t) (v & 255);
+    }
+    (*env)->ReleaseIntArrayElements(env, jpixels, px, JNI_ABORT);
+
+    struct fos_dev *d = fos_dev_start_image(rgb, pic_w, pic_h, "", film, 1, when ? when : "", "");
+    if (!d)
+    {
+        free(rgb);
+        snprintf(last_error, sizeof(last_error), "can't start a %d x %d picture", pic_w, pic_h);
+        pthread_mutex_unlock(&engine_lock);
+        return -1;
+    }
+    fos_dev_preview_mode(d, 1);
+    int p = 0;
+    while ((p = fos_dev_step(d, 40)) >= 0 && !fos_dev_prepared(d)) { }
+    if (p < 0 || !fos_dev_prepared(d))
+    {
+        snprintf(last_error, sizeof(last_error), "%s", fos_dev_error(d));
+        fos_dev_free(d);
+        free(rgb);
+        pthread_mutex_unlock(&engine_lock);
+        return -1;
+    }
+    pv = d;
+    pv_pixels = rgb;
+    pv_image = 1;
+    snprintf(pv_key, sizeof(pv_key), "%s", key);
+    pthread_mutex_unlock(&engine_lock);
+    if (when) (*env)->ReleaseStringUTFChars(env, jwhen, when);
+    (*env)->ReleaseStringUTFChars(env, jkey, key);
+    return 0;
+}
+
+/* Draw the kept frame with the knobs on screen: the same 720 x 480 print a
+ * develop writes, without reading the RAW again. */
+JNIEXPORT jint JNICALL JNI_FN(previewRender)(JNIEnv *env, jclass cls, jint film, jint shadows,
+                                             jint style, jint amount, jint range, jint spread,
+                                             jint warmth, jint stamp, jstring jout)
+{
+    const char *out = (*env)->GetStringUTFChars(env, jout, 0);
+    if (!out)
+    {
+        snprintf(last_error, sizeof(last_error), "bad preview path");
+        return -1;
+    }
+    pthread_mutex_lock(&engine_lock);
+    if (!pv)
+    {
+        snprintf(last_error, sizeof(last_error), "no frame is kept");
+        pthread_mutex_unlock(&engine_lock);
+        (*env)->ReleaseStringUTFChars(env, jout, out);
+        return -1;
+    }
+    if (!fos_dev_reprint(pv, film))
+    {
+        snprintf(last_error, sizeof(last_error), "the kept frame can't be drawn again");
+        pv_drop_locked();
+        pthread_mutex_unlock(&engine_lock);
+        (*env)->ReleaseStringUTFChars(env, jout, out);
+        return -1;
+    }
+    fos_dev_adjust(pv, shadows, style, amount, range, spread, warmth);
+    fos_dev_stamp(pv, stamp);
+    fos_dev_jpeg(pv, out);
+    int p = 0;
+    while ((p = fos_dev_step(pv, 40)) >= 0 && p < 1000) { }
+    if (p < 0)
+    {
+        snprintf(last_error, sizeof(last_error), "%s", fos_dev_error(pv));
+        pv_drop_locked();
+        pthread_mutex_unlock(&engine_lock);
+        (*env)->ReleaseStringUTFChars(env, jout, out);
+        return -1;
+    }
+    pthread_mutex_unlock(&engine_lock);
+    (*env)->ReleaseStringUTFChars(env, jout, out);
+    return 0;
+}
+
+JNIEXPORT void JNICALL JNI_FN(previewClose)(JNIEnv *env, jclass cls)
+{
+    pthread_mutex_lock(&engine_lock);
+    pv_drop_locked();
+    pthread_mutex_unlock(&engine_lock);
 }

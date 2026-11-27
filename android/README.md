@@ -17,7 +17,8 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
   the queue and developed with the film and size already chosen
 * see the frame **before** you develop it: the preview panel runs the same engine at its 720 × 480
   print, so the look on screen is the look DEVELOP writes — tap the preview to go through the
-  picked frames one at a time
+  picked frames one at a time. The frame is decoded once and kept, so a slider or another film
+  redraws it in a moment instead of reading the RAW again
 * choose one of the **68 film stocks** on a shelf like the camera's — COLOUR / SLIDE / B&W / CINE,
   canisters in their box colours, with the film's blurb, ISO and process under the name
 * **open a roll**: point it at the folder holding `ROLL_NNN.TXT` and the app reads the log, finds
@@ -29,6 +30,11 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
   gathered from), Spread (how far it reaches) and Warmth (its tint). They start at 50, 50, 50, 0
   and Off; every preview and every DEVELOP goes through the values on screen
 * develop into `Pictures/M-Film`, JPEG with the film in its EXIF
+* **come back to where you were**: the film, the Shadows and Glow values, the print size, the date
+  stamp and the frames picked last time are kept, so a roll shot on Gold 200 opens on Gold 200
+  with its trail values where you left them
+* **leave the app while it works**: a roll develops in the foreground with a wake lock, so the
+  notification shade shows the frame being developed and going to the gallery doesn't stop it
 
 | Print size | Pixels | What it is |
 | **Medium** | 1728 × 1152 | a third of the sensor each way |

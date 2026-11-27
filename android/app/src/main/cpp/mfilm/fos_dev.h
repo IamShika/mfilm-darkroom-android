@@ -181,6 +181,18 @@ void fos_dev_free(struct fos_dev *d);
  * nothing to show (not reading the RAW) */
 int fos_dev_preview(const struct fos_dev *d, uint8_t *lum, int w, int h);
 
+/* ---- the phone's preview: keep the frame decoded, draw it again ----
+ * A CR2's decode is most of a develop (progress 0..800); the phone's sliders
+ * would pay it at every touch. fos_dev_preview_mode(d, 1) marks the frame, the
+ * caller steps it to ST_KEY (a CR2) or ST_IMAGE (a picture),
+ * fos_dev_keep_raw holds what the decode made, and fos_dev_reprint runs the
+ * film, the shadows and the glow again from there -- the JPEG it writes is the
+ * one a full develop writes. The frame is freed with fos_dev_free. */
+void fos_dev_preview_mode(struct fos_dev *d, int on);
+int  fos_dev_prepared(const struct fos_dev *d);     /* 1: decoded, ready to reprint */
+int  fos_dev_keep_raw(struct fos_dev *d);           /* 0: no memory for it */
+int  fos_dev_reprint(struct fos_dev *d, int film);  /* 0: can't (the frame is gone, or its table) */
+
 /* the roll's contact sheet from its frames' prints (NULL: not
  * developed); written as a print with frame 0. Frame i sits in cell
  * (i % 6, i / 6) of FOS_THUMB_W x FOS_THUMB_H cells, rows centred */

@@ -52,6 +52,27 @@ final class MfilmNative {
                                    int stamp, int shadows, int style, int amount, int range,
                                    int spread, int warmth, String when, Progress progress);
 
+    /**
+     * Keep a CR2 decoded for the next previews, keyed by key (the app's own
+     * name for the file it copied out of its URI). The RAW is most of a
+     * develop, so the sliders then redraw the frame from it instead of
+     * reading them again. 0 when it is kept and ready, -1 otherwise.
+     */
+    static native int previewOpen(String cr2, int film, String when, String key);
+
+    /** The same for a picture (ARGB pixels): they are only needed the first time. */
+    static native int previewOpenImage(int[] pixels, int w, int h, int film, String when, String key);
+
+    /** 1 when this key is the frame the preview has kept. */
+    static native int previewCached(String key);
+
+    /** Draw the kept frame with the knobs on screen, into jpeg. 0 when written. */
+    static native int previewRender(int film, int shadows, int style, int amount, int range,
+                                    int spread, int warmth, int stamp, String jpeg);
+
+    /** Let the kept frame go (before a batch, or when the app is done). */
+    static native void previewClose();
+
     interface Progress {
         /** 0..1000 while the frame develops. */
         void onProgress(int permille);
