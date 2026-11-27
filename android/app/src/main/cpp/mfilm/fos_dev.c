@@ -3303,7 +3303,9 @@ static int big_setup_image(struct fos_dev *d, int size)
     if (bh < d->ph) bh = d->ph;
     if (bw > RAW_MAX || bh > RAW_MAX || (long) bw * bh > RAW_AREA) return 0;
     const int n_rgb = BIG_ROWS * bw * 3, n_idx = BIG_ROWS * bw, n_err = (bw + 2) * 3 * 2 * 2;
-    const int n_vig = bw * 2 * 2, n_g = bw * 2, n_lin = bw * 3 * 2 * 2;
+    /* one vignette value a column and one a row (as big_setup has them): a
+     * picture taller than it is wide needs bh of them, not bw (#portrait) */
+    const int n_vig = ((bw + bh) * 2 + 3) & ~3, n_g = bw * 2, n_lin = bw * 3 * 2 * 2;
     const int total = n_rgb + n_idx + n_err + n_vig + n_g + n_lin;
     uint8_t *a = d->barena = fos_port_alloc(total);
     if (!a) return 0;
@@ -3864,12 +3866,17 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                 break;
             case ST_JPEG:
             {
-                /* the picture only: a portrait frame without the print's sides */
-                int x0 = d->rows_axis_x ? d->ox0 : 0, w = d->rows_axis_x ? d->ow : W;
+                /* the picture only: a portrait frame without the print's sides,
+                 * and a picture without the bars the screen's 720 x 480 print
+                 * keeps around a portrait one */
+                int x0 = d->image ? d->px0 : d->rows_axis_x ? d->ox0 : 0;
+                int w = d->image ? d->pw : d->rows_axis_x ? d->ow : W;
+                int y0 = d->image ? d->py0 : 0;
+                int h = d->image ? d->ph : H;
                 char desc[48];
                 snprintf(desc, sizeof(desc), "%s %s", fos_films[d->film].brand, fos_films[d->film].name);
                 struct fos_jpeg_meta m = { d->when, desc, d->fstop };
-                if (!fos_jpeg_write(d->jpeg, d->rgb + 3 * x0, 3 * W, w, H, 92, &m))
+                if (!fos_jpeg_write(d->jpeg, d->rgb + 3 * ((long) y0 * W + x0), 3 * W, w, h, 92, &m))
                 {
                     char msg[200];
                     snprintf(msg, sizeof(msg), "dev: can't write %s", d->jpeg);
