@@ -11,12 +11,15 @@
  * diffusion, its own palette, for the 8-bit screen.
  *
  * Everything runs in steps that stop after a time budget, so the film OS
- * keeps animating on the same task: no threads, no locks.
+ * keeps animating on the same task: on the camera no threads and no locks.
+ * The phone's build (MFILM_SMP) finishes a big print's rows on up to four
+ * cores, each row its own: the print comes out the same, byte for byte.
  */
 
 #include "fos.h"
 #include "fos_dev.h"
 #include "fos_jpeg.h"
+#include "fos_png.h"
 #include <math.h>
 #include <string.h>
 
@@ -323,6 +326,7 @@ enum { ST_OPEN, ST_DECODE, ST_IMAGE, ST_KEY, ST_EXPOSE, ST_GLOW, ST_FINISH, ST_B
 
 #define BIG_BANDS   64                  /* a big print's sums are kept in pieces of a megabyte */
 #define BIG_ROWS    16                  /* its rows finished at a time: a row of JPEG blocks */
+#define DEV_CORES   4                   /* the rows a phone finishes at once (MFILM_SMP) */
 
 struct huff
 {
@@ -420,8 +424,9 @@ struct fos_dev
      * beside the screen's print as the RAW is read, finished a few rows at
      * a time into the JPEG and the zoom file once the screen's print has
      * given the exposure, the glow and the palette */
-    int want_big;                       /* FOS_SIZE_M or _L asked for */
+    int want_big;                       /* FOS_SIZE_M, _L or _XL asked for */
     char zoom[128];                     /* the zoom file, or "" */
+    char png[128];                      /* the lossless print's file, or "" (fos_dev_png) */
     int big, bshift;                    /* raw pixels per print pixel each way (0: none); samples >> bshift are summed */
     int bstraight;                      /* the print's columns are the sensor's, in order (big_row) */
     int bsize;                          /* FOS_SIZE_* it comes to */
@@ -438,7 +443,9 @@ struct fos_dev
     uint8_t *brgb, *bidx;               /* BIG_ROWS rows finished: RGB for the JPEG, indices for the zoom file */
     int16_t *berr;
     struct fos_jpeg *bjpeg;
+    struct fos_png *bpng;               /* the lossless print, when one was asked for instead */
     void *bzoom;
+    uint8_t *smp;                       /* the rows another core finishes: a scratch block each */
     int bfail;                          /* 1: the JPEG couldn't all be written */
 
     /* a picture that is not a CR2 (fos_dev_start_image): sRGB pixels, and
@@ -451,6 +458,7 @@ struct fos_dev
     /* the phone's knobs (fos_dev_adjust, fos_dev_grain) */
     int shadows, bloom_style, bloom_amount, bloom_range, bloom_spread, bloom_warmth;
     int grain_adj;                      /* the film stock's grain, 0..200 percent */
+    int quality;                        /* the JPEG's quality, 1..100 (the print's, and the big print's) */
     uint16_t *bloom;                    /* the glow, GW x GH, 1/256 of a level */
     int bloom_tint[3], bloom_gain;      /* its colour and strength (1/256) */
 
@@ -1031,12 +1039,18 @@ static void big_free(struct fos_dev *d)
     d->big = 0;
 }
 
-/* FOS_SIZE_L: the sensor's pixels two by two (one of red, two of green,
- * one of blue to a print pixel: nothing to interpolate); _M: three by
- * three. 1 when its memory is there. */
+/* How many of the sensor's pixels fall in a print pixel each way: _L two by
+ * two (one of red, two of green, one of blue to a print pixel: nothing to
+ * interpolate), _M three by three, _XL one -- the frame itself. */
+static int big_factor(int size)
+{
+    return size == FOS_SIZE_XL ? 1 : size == FOS_SIZE_L ? 2 : 3;
+}
+
+/* the bigger print's geometry: 1 when its memory is there. */
 static int big_setup(struct fos_dev *d, int size)
 {
-    const int f = size == FOS_SIZE_L ? 2 : 3;
+    const int f = big_factor(size);
     const int pw = d->crop_w / f, ph = d->crop_h / f;       /* the picture, as the sensor lies */
     const int portrait = d->rows_axis_x;
     const int bw = portrait ? ph : pw, bh = portrait ? pw : ph;
@@ -1050,6 +1064,11 @@ static int big_setup(struct fos_dev *d, int size)
      * it first takes all of that memory to see what is there. */
     int per = ((1 << 20) - 64) / (bw * 6);                  /* rows in a piece */
     if (per < 1) per = 1;
+    /* A full-sensor print's sums are far more than a megabyte a piece holds and
+     * than BIG_BANDS pieces: its pieces grow until they fit (on a phone, 26 of
+     * 4 MB for the 107 MB a 5184 x 3456 print's sums take). The camera's own
+     * sizes keep the megabyte pieces it always had. */
+    while ((bh + per - 1) / per > BIG_BANDS) per *= 2;
     int nb = (bh + per - 1) / per;
     if (nb > BIG_BANDS) return 0;
     int line = bw > bh ? bw : bh;
@@ -1058,8 +1077,9 @@ static int big_setup(struct fos_dev *d, int size)
     const int n_row = bh * (int) sizeof(uint16_t *), n_32 = bw * 3 * 4, n_err = (bw + 2) * 3 * 2 * 2;
     const int n_cmap = (d->raw_w * 2 + 3) & ~3, n_rmap = (d->raw_h * 2 + 3) & ~3, n_cnt = line * 2 * 4;
     const int n_cam = bw * 3 * 2 * 2, n_vig = ((bw + bh) * 2 + 3) & ~3;
+    const int n_smp = (DEV_CORES - 1) * bw * 3 * 8;         /* the extra cores' row scratch */
     const int n_rgb = (BIG_ROWS * bw * 3 + 3) & ~3, n_idx = (BIG_ROWS * bw + 3) & ~3, n_g = bw * 2;
-    const int total = n_row + n_32 + n_err + n_cmap + n_rmap + n_cnt + n_cam + n_vig + n_rgb + n_idx + n_g;
+    const int total = n_row + n_32 + n_err + n_cmap + n_rmap + n_cnt + n_cam + n_vig + n_rgb + n_idx + n_g + n_smp;
     uint8_t *a = d->barena = fos_port_alloc(total);
     int ok = a != 0;
     if (ok)
@@ -1074,6 +1094,7 @@ static int big_setup(struct fos_dev *d, int size)
         d->bvig_x = (int16_t *) a; a += n_vig;
         d->brgb = a; a += n_rgb;
         d->bidx = a; a += n_idx;
+        d->smp = a; a += n_smp;
         d->bgx = a;
     }
     for (int i = 0; ok && i < nb; i++)
@@ -2054,6 +2075,7 @@ struct fos_dev *fos_dev_start(const char *cr2, const char *print, int film, int 
     d->frame = frame;
     d->look = fos_look_of(fos_films[d->film].key);
     d->grain_adj = 100;                 /* the stock's own grain until the phone says otherwise */
+    d->quality = 92;                    /* the JPEG's, as the camera's own prints are */
     d->seed = 12345u + (unsigned) frame * 7919u;
     d->stage = ST_OPEN;
     return d;
@@ -2064,10 +2086,21 @@ void fos_dev_jpeg(struct fos_dev *d, const char *path)
     if (d) snprintf(d->jpeg, sizeof(d->jpeg), "%s", path ? path : "");
 }
 
+/* the lossless way instead: the print as a PNG, and no JPEG written at all */
+void fos_dev_png(struct fos_dev *d, const char *path)
+{
+    if (d) snprintf(d->png, sizeof(d->png), "%s", path ? path : "");
+}
+
+void fos_dev_quality(struct fos_dev *d, int quality)
+{
+    if (d) d->quality = fos_clamp(quality, 1, 100);
+}
+
 void fos_dev_big(struct fos_dev *d, int size, const char *zoom)
 {
     if (!d) return;
-    d->want_big = size < FOS_SIZE_S ? FOS_SIZE_S : size > FOS_SIZE_L ? FOS_SIZE_L : size;
+    d->want_big = size < FOS_SIZE_S ? FOS_SIZE_S : size > FOS_SIZE_XL ? FOS_SIZE_XL : size;
     snprintf(d->zoom, sizeof(d->zoom), "%s", zoom ? zoom : "");
 }
 
@@ -2136,6 +2169,7 @@ void fos_dev_free(struct fos_dev *d)
     fos_port_free(d->raw);
     /* stopped in the middle of the big print: what there is of its files is closed */
     if (d->bjpeg) fos_jpeg_end(d->bjpeg);
+    if (d->bpng) fos_png_end(d->bpng);
     if (d->bzoom) fos_port_close(d->bzoom);
     big_free(d);
     fos_port_free(d->smask[0]); fos_port_free(d->smask[1]);
@@ -3356,7 +3390,7 @@ static __attribute__((noinline)) void stage_finish_image(struct fos_dev *d, int 
  * picture_pixel, the rest as big_finish does a RAW's */
 static int big_setup_image(struct fos_dev *d, int size)
 {
-    const int f = size == FOS_SIZE_L ? 2 : 3;
+    const int f = big_factor(size);
     int bw = d->pic_w / f, bh = d->pic_h / f;
     if (bw < d->pw) bw = d->pw;
     if (bh < d->ph) bh = d->ph;
@@ -3365,7 +3399,8 @@ static int big_setup_image(struct fos_dev *d, int size)
     /* one vignette value a column and one a row (as big_setup has them): a
      * picture taller than it is wide needs bh of them, not bw (#portrait) */
     const int n_vig = ((bw + bh) * 2 + 3) & ~3, n_g = bw * 2, n_lin = bw * 3 * 2 * 2;
-    const int total = n_rgb + n_idx + n_err + n_vig + n_g + n_lin;
+    const int n_smp = (DEV_CORES - 1) * bw * 3 * 8;
+    const int total = n_rgb + n_idx + n_err + n_vig + n_g + n_lin + n_smp;
     uint8_t *a = d->barena = fos_port_alloc(total);
     if (!a) return 0;
     d->brgb = a; a += n_rgb;
@@ -3378,6 +3413,7 @@ static int big_setup_image(struct fos_dev *d, int size)
     d->bvig_y = d->bvig_x + bw;
     d->bfx = d->bgx + bw;
     d->bcam = d->blin + bw * 3;         /* where a row's places on the table go */
+    d->smp = (uint8_t *) (d->bcam + bw * 3);
     memset(d->berr, 0, n_err);
     d->bw = bw; d->bh = bh;
     d->big = f; d->bshift = 0; d->bsize = size;
@@ -3387,9 +3423,11 @@ static int big_setup_image(struct fos_dev *d, int size)
 static void glow_pos_at(float p, int n, uint8_t *cell, uint8_t *frac);
 static void stamp_row(const uint8_t *mask, int mw, int mh, uint8_t *rgb, int pw, int ph, int y);
 
-static __attribute__((noinline)) void big_finish_image(struct fos_dev *d, int y, uint8_t *rgb)
+static __attribute__((noinline)) void big_finish_image(struct fos_dev *d, int y, uint8_t *rgb,
+                                                       uint32_t *t32, uint16_t *cam, uint16_t *lin)
 {
     const int bw = d->bw;
+    (void) t32;                         /* a picture has no sums to widen */
     const struct fos_look *L = d->look;
     int hal[3];
     for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
@@ -3402,10 +3440,10 @@ static __attribute__((noinline)) void big_finish_image(struct fos_dev *d, int y,
         for (int j = 0; j < GW; j++) grow[j] = g0[j] * (8 - fy) + g1[j] * fy;
     }
     for (int x = 0; x < bw; x++)
-        picture_pixel(d, x, y, bw, d->bh, d->blin + 3 * x);
-    finish_pos(d->blin, d->bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
+        picture_pixel(d, x, y, bw, d->bh, lin + 3 * x);
+    finish_pos(lin, cam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
                (int) (L->hal_thr * 4096));
-    finish_lut(d->bcam, rgb, bw);
+    finish_lut(cam, rgb, bw);
     if (d->shadows) shadow_row(rgb, bw, d->shadows);
     int c = grain_clump(L, bw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
@@ -3608,14 +3646,24 @@ static void big_begin(struct fos_dev *d)
     const float sx0 = d->image ? (float) d->px0 : d->rows_axis_x ? (float) d->ox0 : 0;
     const float sw = d->image ? (float) d->pw : d->rows_axis_x ? (float) d->ow : (float) FOS_PRINT_W;
     for (int x = 0; x < bw; x++) glow_pos_at(sx0 + (x + 0.5f) * sw / bw - 0.5f, GW, &d->bgx[x], &d->bfx[x]);
-    if (d->jpeg[0])
+    if (d->png[0])
+    {
+        d->bpng = fos_png_begin(d->png, bw, bh);
+        if (!d->bpng)
+        {
+            snprintf(msg, sizeof(msg), "dev: can't write %s", d->png);
+            fos_port_log(msg);
+            d->bfail = 1;
+        }
+    }
+    else if (d->jpeg[0])
     {
         char desc[48];
         snprintf(desc, sizeof(desc), "%s %s", fos_films[d->film].brand, fos_films[d->film].name);
         struct fos_jpeg_meta m = { d->when, desc, d->fstop, d->shot, d->make, d->model,
                                    d->lens, d->iso, d->shutter_n, d->shutter_d,
                                    d->focal_n, d->focal_d, d->fnum_n, d->fnum_d };
-        d->bjpeg = fos_jpeg_begin(d->jpeg, bw, bh, 92, &m);
+        d->bjpeg = fos_jpeg_begin(d->jpeg, bw, bh, d->quality, &m);
         if (!d->bjpeg)
         {
             snprintf(msg, sizeof(msg), "dev: can't write %s", d->jpeg);
@@ -3681,19 +3729,19 @@ static __attribute__((noinline)) void big_dither(struct fos_dev *d, const uint8_
 /* row y of the big print into rgb: as stage_expose and stage_finish do a
  * row of the screen's, from its own sums, with the exposure and the glow
  * the screen's print found */
-static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8_t *rgb)
+static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8_t *rgb,
+                                                 uint32_t *t32, uint16_t *cam, uint16_t *lin)
 {
     const int bw = d->bw, sh = d->bshift;
     const struct fos_look *L = d->look;
     const uint16_t *s = d->brow[y];
-    uint32_t *t32 = d->b32;
     for (int i = 0; i < 3 * bw; i++) t32[i] = (uint32_t) s[i] << sh;
     int a, b;
     const uint16_t *ra, *rb;
     if (d->rows_axis_x) { a = d->bne_c[y]; b = d->bno_c[y]; ra = d->bne_r; rb = d->bno_r; }
     else { a = d->bne_r[y]; b = d->bno_r[y]; ra = d->bne_c; rb = d->bno_c; }
-    expose_cam(d, t32, d->bcam, bw, a, b, ra, rb);
-    expose_lin(d, d->bcam, d->blin, bw, 0, 0);
+    expose_cam(d, t32, cam, bw, a, b, ra, rb);
+    expose_lin(d, cam, lin, bw, 0, 0);
     int hal[3];
     for (int c = 0; c < 3; c++) hal[c] = d->glow ? (int) (L->halation * L->hal_tint[c] * 256) : 0;
     int32_t grow[GW];
@@ -3704,9 +3752,9 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
         const int32_t *g0 = d->glow + gy * GW, *g1 = g0 + GW;
         for (int j = 0; j < GW; j++) grow[j] = g0[j] * (8 - fy) + g1[j] * fy;
     }
-    finish_pos(d->blin, d->bcam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
+    finish_pos(lin, cam, bw, 4096 - d->bvig_y[y], d->bvig_x, d->glow ? grow : 0, d->bgx, d->bfx, hal,
                (int) (L->hal_thr * 4096));
-    finish_lut(d->bcam, rgb, bw);
+    finish_lut(cam, rgb, bw);
     if (d->shadows) shadow_row(rgb, bw, d->shadows);
     int c = grain_clump(L, bw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
@@ -3717,16 +3765,134 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
     bloom_row(d, rgb, bw, y, bw, d->bh);
 }
 
-/* its next rows, to the JPEG and the zoom file */
+/* ---- a big print's rows on more than one core */
+/*
+ * The camera finishes a print a row at a time, in the slice of work it has
+ * before its screen has to be drawn again; a phone has the cores and the
+ * memory for four rows at once. A row is its own sums, its own exposure and
+ * its own grain -- the plate is built once before the first row and only read
+ * -- so the print comes out the same at any number of them: the same files,
+ * byte for byte. The error diffusion and the files' writes stay a row at a
+ * time.
+ */
+#ifdef MFILM_SMP
+#include <pthread.h>
+#include <unistd.h>
+
+struct smp_job
+{
+    struct fos_dev *d;
+    int lo, hi;                 /* the band's rows [lo, hi), as the band numbers them */
+    int y0;                     /* the band's first row of the print */
+    int tid;                    /* 0: the frame's own scratch; 1.. its own block */
+};
+
+static int smp_cores(void)
+{
+    static int n;
+    if (!n)
+    {
+        long c = sysconf(_SC_NPROCESSORS_ONLN);
+        n = c < 1 ? 1 : c > 8 ? 8 : (int) c;
+    }
+    return n;
+}
+
+/* the scratch one row's work needs: its sums at 32 bits, the camera's colours
+ * and the linear light. Thread 0 uses the frame's own three arrays */
+static void smp_scratch(struct fos_dev *d, int tid, uint32_t **t32, uint16_t **cam, uint16_t **lin)
+{
+    const int bw = d->bw;
+    if (!tid) { *t32 = d->b32; *cam = d->bcam; *lin = d->blin; return; }
+    uint8_t *s = d->smp + (size_t) (tid - 1) * (size_t) bw * 3 * 8;
+    *t32 = (uint32_t *) s;
+    *cam = (uint16_t *) (s + (size_t) bw * 12);
+    *lin = *cam + bw * 3;
+}
+
+static void *smp_worker(void *p)
+{
+    struct smp_job *j = (struct smp_job *) p;
+    struct fos_dev *d = j->d;
+    const int bw = d->bw;
+    uint32_t *t32; uint16_t *cam, *lin;
+    smp_scratch(d, j->tid, &t32, &cam, &lin);
+    for (int i = j->lo; i < j->hi; i++)
+    {
+        /* the band holds its rows from 0: the print's row is y0 + i */
+        uint8_t *rgb = d->brgb + (size_t) i * (size_t) bw * 3;
+        if (d->image) big_finish_image(d, j->y0 + i, rgb, t32, cam, lin);
+        else big_finish(d, j->y0 + i, rgb, t32, cam, lin);
+    }
+    return 0;
+}
+
+/* The grain's plate, built once before the rows start: finish_grain builds it
+ * on the first row that wants it, and two rows must not build it at once. 1
+ * when the rows can read it, or there is none to read. */
+static int smp_grain_ready(struct fos_dev *d, int w)
+{
+    const struct fos_look *L = d->look;
+    int q3, q2, q1, q0;
+    grain_taps(grain_clump(L, w, grain_ref(d)), &q3, &q2, &q1, &q0);
+    int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    if (!(grain * d->grain_adj / 100)) return 1;        /* no grain: nothing to build */
+    if (!plate_on()) return 1;                          /* drawn a row at a time, no plate */
+    const int nf = L->mono ? 1 : 4;
+    if (!plate[0] || plate_nf != nf || plate_seed != d->seed
+        || plate_q3 != q3 || plate_q2 != q2 || plate_q1 != q1 || plate_q0 != q0)
+        plate_build(d->seed, nf, q3, q2, q1, q0);
+    return plate[0] != 0;               /* no room for it: one row at a time, as it falls back */
+}
+#endif
+
+/* its next rows, to the JPEG (or the PNG) and the zoom file */
 static void big_rows(struct fos_dev *d)
 {
     const int bw = d->bw, y0 = d->row, n = d->bh - y0 < BIG_ROWS ? d->bh - y0 : BIG_ROWS;
-    for (int i = 0; i < n; i++)
+    int nt = 1;
+#ifdef MFILM_SMP
+    if (d->smp && n > 1)
     {
-        if (d->image) big_finish_image(d, y0 + i, d->brgb + i * bw * 3);
-        else big_finish(d, y0 + i, d->brgb + i * bw * 3);
+        nt = smp_cores();
+        if (nt > DEV_CORES) nt = DEV_CORES;
+        if (nt > n) nt = n;
+        if (nt > 1 && !smp_grain_ready(d, bw)) nt = 1;
+    }
+    if (nt > 1)
+    {
+        pthread_t th[DEV_CORES];
+        struct smp_job job[DEV_CORES];
+        int made[DEV_CORES];
+        for (int t = 0; t < nt; t++)
+        {
+            job[t].d = d;
+            job[t].tid = t;
+            job[t].y0 = y0;
+            job[t].lo = t * n / nt;
+            job[t].hi = (t + 1) * n / nt;
+            made[t] = 0;
+            if (t && pthread_create(&th[t], 0, smp_worker, &job[t]) == 0) made[t] = 1;
+        }
+        smp_worker(&job[0]);
+        for (int t = 1; t < nt; t++)
+        {
+            if (made[t]) pthread_join(th[t], 0);
+            else smp_worker(&job[t]);
+        }
+    }
+    else
+#endif
+    {
+        for (int i = 0; i < n; i++)
+        {
+            uint8_t *rgb = d->brgb + (size_t) i * (size_t) bw * 3;
+            if (d->image) big_finish_image(d, y0 + i, rgb, d->b32, d->bcam, d->blin);
+            else big_finish(d, y0 + i, rgb, d->b32, d->bcam, d->blin);
+        }
     }
     if (d->bjpeg) fos_jpeg_rows(d->bjpeg, d->brgb, bw * 3, n);
+    if (d->bpng) fos_png_rows(d->bpng, d->brgb, bw * 3, n);
     if (d->bzoom)
     {
         for (int i = 0; i < n; i++)
@@ -3751,6 +3917,14 @@ static void big_end(struct fos_dev *d)
         d->bfail = 1;
     }
     d->bjpeg = 0;
+    if (d->bpng && !fos_png_end(d->bpng))
+    {
+        char msg[200];
+        snprintf(msg, sizeof(msg), "dev: can't write %s", d->png);
+        fos_port_log(msg);
+        d->bfail = 1;
+    }
+    d->bpng = 0;
     if (d->bzoom) fos_port_close(d->bzoom);
     d->bzoom = 0;
     fos_port_free(d->glow); d->glow = 0;
@@ -3915,7 +4089,7 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                     /* the bigger print comes after the palette, which its zoom file is in; it is the JPEG then */
                     if (!d->big && !d->keep) { fos_port_free(d->glow); d->glow = 0; }
                     if (d->bloom_style) { d->stage = ST_BLOOM; d->row = -1; }
-                    else d->stage = d->big ? ST_QUANT : d->jpeg[0] ? ST_JPEG : ST_QUANT;
+                    else d->stage = d->big ? ST_QUANT : (d->jpeg[0] || d->png[0]) ? ST_JPEG : ST_QUANT;
                 }
                 break;
             case ST_BLOOM:
@@ -3925,7 +4099,7 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                 if (d->row >= H || !d->bloom)
                 {
                     d->row = 0;
-                    d->stage = d->big ? ST_QUANT : d->jpeg[0] ? ST_JPEG : ST_QUANT;
+                    d->stage = d->big ? ST_QUANT : (d->jpeg[0] || d->png[0]) ? ST_JPEG : ST_QUANT;
                 }
                 break;
             case ST_JPEG:
@@ -3942,10 +4116,16 @@ static int dev_step(struct fos_dev *d, int budget_ms)
                 struct fos_jpeg_meta m = { d->when, desc, d->fstop, d->shot, d->make, d->model,
                                            d->lens, d->iso, d->shutter_n, d->shutter_d,
                                            d->focal_n, d->focal_d, d->fnum_n, d->fnum_d };
-                if (!fos_jpeg_write(d->jpeg, d->rgb + 3 * ((long) y0 * W + x0), 3 * W, w, h, 92, &m))
+                int wrote;
+                if (d->png[0])
+                    wrote = fos_png_write(d->png, d->rgb + 3 * ((long) y0 * W + x0), 3 * W, w, h);
+                else
+                    wrote = fos_jpeg_write(d->jpeg, d->rgb + 3 * ((long) y0 * W + x0), 3 * W, w, h,
+                                           d->quality, &m);
+                if (!wrote)
                 {
                     char msg[200];
-                    snprintf(msg, sizeof(msg), "dev: can't write %s", d->jpeg);
+                    snprintf(msg, sizeof(msg), "dev: can't write %s", d->png[0] ? d->png : d->jpeg);
                     fos_port_log(msg);
                 }
                 /* the phone's preview is the same print, stopped before the palette */

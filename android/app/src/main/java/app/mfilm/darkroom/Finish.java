@@ -80,10 +80,11 @@ final class Finish {
     }
 
     /**
-     * The developed print sharpened in place. Its EXIF and the caption are
-     * carried over exactly, because the JPEG is written again here.
+     * The developed print sharpened in place. A JPEG's EXIF and caption are
+     * carried over exactly, because the JPEG is written again here; a PNG has
+     * none to carry, so it is written straight back over the print.
      */
-    static void rewrite(File jpeg, int amount) throws IOException {
+    static void rewrite(File jpeg, int amount, boolean png) throws IOException {
         if (amount <= 0) return;
         Bitmap in = BitmapFactory.decodeFile(jpeg.getAbsolutePath());
         if (in == null) throw new IOException("can't read the print back");
@@ -92,13 +93,15 @@ final class Finish {
         try {
             Bitmap out = sharpen(in, amount);
             if (out == in) return;
-            try (OutputStream o = new FileOutputStream(sharp)) {
-                if (!out.compress(Bitmap.CompressFormat.JPEG, 95, o)) {
+            try (OutputStream o = new FileOutputStream(png ? jpeg : sharp)) {
+                if (!out.compress(png ? Bitmap.CompressFormat.PNG : Bitmap.CompressFormat.JPEG,
+                        png ? 100 : 95, o)) {
                     throw new IOException("can't write the sharpened print");
                 }
             } finally {
                 out.recycle();
             }
+            if (png) return;
             Geometry.keepMetadata(jpeg, sharp, kept);
         } finally {
             in.recycle();

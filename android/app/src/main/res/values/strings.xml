@@ -10,6 +10,8 @@
     <string name="film_label">FILM</string>
     <string name="size_label">PRINT SIZE</string>
     <string name="stamp">Date stamp in the corner</string>
+    <string name="lossless">Lossless PNG (no JPEG artefacts)</string>
+    <string name="print_too_big">%1$s: not enough memory for a print that size. Try Large, or Sharpen off.</string>
     <string name="develop">DEVELOP</string>
     <string name="open_gallery">Open gallery</string>
     <string name="share">Share the print</string>
@@ -27,6 +29,7 @@
     <string name="shadow">Shadows</string>
     <string name="grain">Grain %</string>
     <string name="sharpen">Sharpen</string>
+    <string name="quality">JPEG quality</string>
     <string name="bloom_style">Style</string>
     <string name="bloom_off">Off</string>
     <string name="bloom_bloom">Bloom</string>

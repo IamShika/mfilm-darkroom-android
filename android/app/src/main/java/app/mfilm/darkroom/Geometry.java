@@ -71,21 +71,24 @@ final class Geometry
      * The developed print, straightened and cropped in place. Its APP0/APP1
      * segments -- the EXIF with the film and the camera, and the caption --
      * are carried over byte for byte, because the JPEG is written again here.
+     * A PNG has none to carry, so it is written straight back over the print.
      */
-    static void rewrite(File jpeg, int tenths, int shape, int zoom) throws IOException {
+    static void rewrite(File jpeg, int tenths, int shape, int zoom, boolean png) throws IOException {
         Bitmap in = BitmapFactory.decodeFile(jpeg.getAbsolutePath());
         if (in == null) throw new IOException("can't read the print back");
         File turned = new File(jpeg.getParentFile(), jpeg.getName() + ".crop");
         File kept = new File(jpeg.getParentFile(), jpeg.getName() + ".exif");
         try {
             Bitmap out = apply(in, tenths, shape, zoom);
-            try (OutputStream o = new FileOutputStream(turned)) {
-                if (!out.compress(Bitmap.CompressFormat.JPEG, 92, o)) {
+            try (OutputStream o = new FileOutputStream(png ? jpeg : turned)) {
+                if (!out.compress(png ? Bitmap.CompressFormat.PNG : Bitmap.CompressFormat.JPEG,
+                        png ? 100 : 92, o)) {
                     throw new IOException("can't write the cropped print");
                 }
             } finally {
                 if (out != in) out.recycle();
             }
+            if (png) return;
             keepMetadata(jpeg, turned, kept);
         } finally {
             in.recycle();

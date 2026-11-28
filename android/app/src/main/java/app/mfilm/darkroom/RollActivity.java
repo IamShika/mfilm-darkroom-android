@@ -330,7 +330,7 @@ public class RollActivity extends Activity {
             try {
                 copy(frames.get(i), raw);
                 int r = MfilmNative.develop(raw.getAbsolutePath(), jpeg.getAbsolutePath(),
-                        filmIndex, 0, 0, 0, 0, 0, 0, 0, 0, 100, "", null);
+                        filmIndex, 0, 0, 0, 0, 0, 0, 0, 0, 100, 92, 0, "", null);
                 raw.delete();
                 if (r == 0) {
                     Bitmap b = decode(jpeg, 480);

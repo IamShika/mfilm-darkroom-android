@@ -88,12 +88,12 @@ public class MainActivity extends Activity {
     private HorizontalScrollView canisterScroll;
     private ImageView previewImage;
     private Spinner sizeSpinner;
-    private Switch stampSwitch;
+    private Switch stampSwitch, losslessSwitch;
     private ProgressBar progressBar;
     private Button pickButton, developButton, galleryButton, rollButton, shareButton;
     private LinearLayout adjust;
     private HistogramView histogram;
-    private SeekBar shadowsBar, amountBar, rangeBar, spreadBar, warmthBar, grainBar, sharpenBar;
+    private SeekBar shadowsBar, amountBar, rangeBar, spreadBar, warmthBar, grainBar, sharpenBar, qualityBar;
     private Spinner styleSpinner;
 
     /* the print as the knobs leave it, and the same print without them, held side by side */
@@ -131,6 +131,8 @@ public class MainActivity extends Activity {
     private int bloomWarmth;
     private int grain = 100;                 // percent of the stock's own grain: 0..200
     private int sharpen;                     // 0..100, the print sharpened after it is developed
+    private int quality = 92;                // the JPEG's: 40..100
+    private boolean lossless;                // a PNG instead: nothing of a JPEG's on the grain
 
     /* which of the picked frames the preview shows */
     private int previewIndex;
@@ -160,6 +162,8 @@ public class MainActivity extends Activity {
         bloomWarmth = prefs.getInt("warmth", 0);
         grain = prefs.getInt("grain", 100);
         sharpen = prefs.getInt("sharpen", 0);
+        quality = prefs.getInt("quality", 92);
+        lossless = prefs.getBoolean("lossless", false);
         String kept = prefs.getString("favourites", "");
         if (kept != null) {
             for (String key : kept.split(",")) if (!key.isEmpty()) favourites.add(key);
@@ -174,6 +178,7 @@ public class MainActivity extends Activity {
         versionView = findViewById(R.id.version);
         sizeSpinner = findViewById(R.id.size);
         stampSwitch = findViewById(R.id.stamp);
+        losslessSwitch = findViewById(R.id.lossless);
         progressBar = findViewById(R.id.progress);
         pickButton = findViewById(R.id.pick);
         developButton = findViewById(R.id.develop);
@@ -203,10 +208,11 @@ public class MainActivity extends Activity {
         loadPresets();
 
         ArrayAdapter<String> sizes = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
-                new String[]{"Medium · a third of the sensor", "Large · half the sensor"});
+                new String[]{"Medium · a third of the sensor", "Large · half the sensor",
+                        "Full · the whole frame, 5184 x 3456"});
         sizes.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         sizeSpinner.setAdapter(sizes);
-        sizeSpinner.setSelection(Math.max(0, Math.min(1, prefs.getInt("size", 1))));
+        sizeSpinner.setSelection(Math.max(0, Math.min(2, prefs.getInt("size", 1))));
         sizeSpinner.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(android.widget.AdapterView<?> parent, View v, int pos, long id) {
                 prefs.edit().putInt("size", pos).apply();
@@ -214,6 +220,11 @@ public class MainActivity extends Activity {
             @Override public void onNothingSelected(android.widget.AdapterView<?> parent) { }
         });
         stampSwitch.setChecked(prefs.getBoolean("stamp", false));
+        losslessSwitch.setChecked(lossless);
+        losslessSwitch.setOnCheckedChangeListener((b, on) -> {
+            lossless = on;
+            prefs.edit().putBoolean("lossless", on).apply();
+        });
 
         buildAdjustments();
         /*
@@ -527,7 +538,8 @@ public class MainActivity extends Activity {
         prefs.edit().putInt("shadows", shadows).putInt("style", bloomStyle)
                 .putInt("amount", bloomAmount).putInt("range", bloomRange)
                 .putInt("spread", bloomSpread).putInt("warmth", bloomWarmth)
-                .putInt("grain", grain).putInt("sharpen", sharpen).apply();
+                .putInt("grain", grain).putInt("sharpen", sharpen)
+                .putInt("quality", quality).apply();
     }
 
     /** the frames last session had, if Android still lets us read them */
@@ -602,10 +614,12 @@ public class MainActivity extends Activity {
                 if (PictureLoader.isCr2(name)) {
                     r = MfilmNative.previewOpen(work.getAbsolutePath(), film, when(lastModified(src)), key);
                     if (r == 0) r = renderKept(film, stamp, jpeg);
-                    if (r != 0) r = developOne(src, dir, jpeg, film, 0, stamp, when(lastModified(src)), null);
+                    if (r != 0) r = developOne(src, dir, jpeg, film, 0, stamp, 92, false,
+                            when(lastModified(src)), null);
                 } else {
                     r = previewPicture(key, work, name, jpeg, film, stamp, when(lastModified(src)));
-                    if (r != 0) r = developOne(src, dir, jpeg, film, 0, stamp, when(lastModified(src)), null);
+                    if (r != 0) r = developOne(src, dir, jpeg, film, 0, stamp, 92, false,
+                            when(lastModified(src)), null);
                 }
                 if (seq != previewSeq.get()) return;         // a newer frame or film won
                 if (r != 0 || !jpeg.isFile()) {
@@ -873,7 +887,8 @@ public class MainActivity extends Activity {
      * went wrong, if it did.
      */
     private int developOne(Uri src, File dir, File jpeg, int film, int size, boolean stamp,
-                           String when, MfilmNative.Progress progress) throws IOException {
+                           int quality, boolean png, String when, MfilmNative.Progress progress)
+            throws IOException {
         String name = displayName(src);
         File work = new File(dir, name);
         try {
@@ -881,7 +896,7 @@ public class MainActivity extends Activity {
             if (PictureLoader.isCr2(name)) {
                 return MfilmNative.develop(work.getAbsolutePath(), jpeg.getAbsolutePath(), film, size,
                         stamp ? 1 : 0, shadows, bloomStyle, bloomAmount, bloomRange, bloomSpread,
-                        bloomWarmth, grain, when, progress);
+                        bloomWarmth, grain, quality, png ? 1 : 0, when, progress);
             }
             Bitmap b = PictureLoader.load(work, name);
             int w = b.getWidth(), h = b.getHeight();
@@ -890,7 +905,7 @@ public class MainActivity extends Activity {
             b.recycle();
             return MfilmNative.developImage(px, w, h, jpeg.getAbsolutePath(), film, size,
                     stamp ? 1 : 0, shadows, bloomStyle, bloomAmount, bloomRange, bloomSpread,
-                    bloomWarmth, grain, when, progress);
+                    bloomWarmth, grain, quality, png ? 1 : 0, when, progress);
         } finally {
             work.delete();
         }
@@ -909,6 +924,9 @@ public class MainActivity extends Activity {
         shadowsBar = addSlider(getString(R.string.shadow), 0, 100, shadows, v -> shadows = v);
         grainBar = addSlider(getString(R.string.grain), 0, 200, grain, v -> grain = v);
         sharpenBar = addSlider(getString(R.string.sharpen), 0, 100, sharpen, v -> sharpen = v);
+        /* the JPEG's quality changes only what is written, not the preview */
+        qualityBar = addSlider(getString(R.string.quality), 40, 100, quality, v -> quality = v,
+                this::saveKnobs);
         addChoice(getString(R.string.bloom_style),
                 new String[]{ getString(R.string.bloom_off), getString(R.string.bloom_bloom),
                         getString(R.string.bloom_diffusion), getString(R.string.bloom_halation),
@@ -1191,7 +1209,7 @@ public class MainActivity extends Activity {
             grainBar.setProgress(clamp(p.grain, 0, 200));
             sharpenBar.setProgress(clamp(p.sharpen, 0, 100));
             styleSpinner.setSelection(clamp(p.style, 0, 5));
-            sizeSpinner.setSelection(clamp(p.size, 0, 1));
+            sizeSpinner.setSelection(clamp(p.size, 0, 2));
             stampSwitch.setChecked(p.stamp);
         } finally {
             applyingPreset = false;
@@ -1338,9 +1356,11 @@ public class MainActivity extends Activity {
             return;
         }
         final int film = filmIndex;
-        final int size = sizeSpinner.getSelectedItemPosition() + 1;      // FOS_SIZE_M, _L
+        final int size = sizeSpinner.getSelectedItemPosition() + 1;      // FOS_SIZE_M, _L, _XL
         final boolean stamp = stampSwitch.isChecked();
         final int turn = straighten, shape = cropShape, zoom = cropZoom;
+        final int q = quality;
+        final boolean png = lossless;
         final List<Uri> raws = new ArrayList<>(picked);
         final String filmName = films[film].name;
         final String filmKey = films[film].key;
@@ -1373,11 +1393,11 @@ public class MainActivity extends Activity {
                 String base = name.replaceAll("\\.[^.]*$", "");
                 String when = when(lastModified(uri));
                 try {
-                    File jpeg = new File(work, base + ".jpg");
+                    File jpeg = new File(work, base + (png ? ".png" : ".jpg"));
                     ui(() -> statusView.setText(getString(R.string.working, n, raws.size(), name)));
                     keepAwake(getString(R.string.keep_awake_frame, n, raws.size(), name), false);
                     long s0 = System.currentTimeMillis();
-                    int r = developOne(uri, work, jpeg, film, size, stamp, when,
+                    int r = developOne(uri, work, jpeg, film, size, stamp, q, png, when,
                             p -> runOnUiThread(() -> progressBar.setProgress(p / 10)));
                     if (r != 0) {
                         failed++;
@@ -1387,23 +1407,28 @@ public class MainActivity extends Activity {
                         continue;
                     }
                     /* the print the preview showed: turned and cut the same way */
-                    if (Geometry.isSet(turn, shape, zoom)) Geometry.rewrite(jpeg, turn, shape, zoom);
+                    if (Geometry.isSet(turn, shape, zoom)) Geometry.rewrite(jpeg, turn, shape, zoom, png);
                     /* the print sharpened last, on the window it came out at */
-                    if (sharpen > 0) Finish.rewrite(jpeg, sharpen);
+                    if (sharpen > 0) Finish.rewrite(jpeg, sharpen, png);
                     long ms = System.currentTimeMillis() - s0;
-                    String out = save(jpeg, "MFILM_" + stampFile(when) + "_" + filmKey + "_" + base + ".jpg",
-                            folder);
+                    String out = save(jpeg, "MFILM_" + stampFile(when) + "_" + filmKey + "_" + base
+                                    + (png ? ".png" : ".jpg"), folder, png ? "image/png" : "image/jpeg");
                     jpeg.delete();
                     ok++;
                     rows.add(new String[]{name, out, filmKey, String.valueOf(shadows),
                             String.valueOf(bloomStyle), String.valueOf(bloomAmount),
                             String.valueOf(bloomRange), String.valueOf(bloomSpread),
                             String.valueOf(bloomWarmth), String.valueOf(grain), String.valueOf(sharpen),
-                            size == 1 ? "medium" : "large",
+                            size == 1 ? "medium" : size == 2 ? "large" : "full",
                             stamp ? "yes" : "no", when,
                             String.format(Locale.US, "%.1f", ms / 1000.0)});
                     final String line = getString(R.string.frame_done, name, ms / 1000.0, out);
                     ui(() -> log("\u2713 " + line));
+                } catch (OutOfMemoryError e) {
+                    /* a full-sensor print's bitmaps are 72 MB each: a phone short of heap fails here */
+                    failed++;
+                    new File(work, base + (png ? ".png" : ".jpg")).delete();
+                    ui(() -> log("\u2717 " + getString(R.string.print_too_big, name)));
                 } catch (Exception e) {
                     failed++;
                     final String err = e.getMessage() == null ? e.toString() : e.getMessage();
@@ -1471,12 +1496,12 @@ public class MainActivity extends Activity {
      * Copies the developed JPEG into Pictures/M-Film -- or into the roll's own
      * folder under it -- and returns where it went.
      */
-    private String save(File jpeg, String name, String folder) throws IOException {
+    private String save(File jpeg, String name, String folder, String mime) throws IOException {
         String relative = Environment.DIRECTORY_PICTURES + "/M-Film"
                 + (folder == null ? "" : "/" + folder);
         ContentValues v = new ContentValues();
         v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
-        v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+        v.put(MediaStore.Images.Media.MIME_TYPE, mime);
         v.put(MediaStore.Images.Media.RELATIVE_PATH, relative);
         v.put(MediaStore.Images.Media.IS_PENDING, 1);
         ContentResolver cr = getContentResolver();
@@ -1677,6 +1702,8 @@ public class MainActivity extends Activity {
         developButton.setEnabled(!on && !picked.isEmpty() && filmIndex >= 0);
         sizeSpinner.setEnabled(!on);
         stampSwitch.setEnabled(!on);
+        losslessSwitch.setEnabled(!on);
+        if (qualityBar != null) qualityBar.setEnabled(!on);
         progressBar.setVisibility(on ? View.VISIBLE : View.GONE);
         if (on) progressBar.setProgress(0);
     }

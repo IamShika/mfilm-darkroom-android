@@ -56,6 +56,8 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
   wrote)
 * **share the print** — the last print DEVELOP wrote goes to whichever app the phone offers
   (messages, mail, Drive, a photo editor) from one button under the log
+* **print it lossless, or at the quality you choose** — the JPEG's quality 40–100, or a **Lossless
+  PNG** with nothing of a JPEG's on the grain
 * **export the contact sheet** — the roll screen's *Export the contact sheet* lays the developed
   frames out on one picture, four to a line with the frame numbers under them, writes it into the
   roll's folder in `Pictures/M-Film` and offers it to the share sheet
@@ -67,12 +69,19 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
 
 | Print size | Pixels | What it is |
 | **Medium** | 1728 × 1152 | a third of the sensor each way |
-| **Large** | 2592 × 1728 | half of it, the biggest the camera's engine makes |
+| **Large** | 2592 × 1728 | half of it |
+| **Full** | 5184 × 3456 | all of the frame, as *Darkrooms* prints it |
 
-These are the camera's two bigger sizes (`FOS_SIZE_M`, `FOS_SIZE_L`). The camera takes about a minute
-a frame for Large; a phone does it in a few seconds. The desktop *Darkrooms* goes to the full RAW
-(5184 × 3456) — the camera engine keeps its sums in bands of a megabyte built for DIGIC memory, so
-full resolution is a bigger change than this port (`BIG_BANDS` in `fos_dev.c`).
+Medium and Large are the camera's own two bigger sizes (`FOS_SIZE_M`, `FOS_SIZE_L`); Full is the
+port's (`FOS_SIZE_XL`). The camera keeps a bigger print's sums in bands of a megabyte for DIGIC
+memory; the phone's build grows the bands to fit and finishes their rows on up to four cores, so a
+full 5184 × 3456 print takes the memory a 24 MP frame needs (about 107 MB) and a few seconds. A
+phone short of that memory falls back to Large by itself. Full with **Sharpen** on holds two 72 MB
+bitmaps while it sharpens: if the heap can't take it, that frame is reported and the roll carries on.
+
+**JPEG quality** (40–100, 92 as it comes) is what the file is written at. **Lossless PNG** writes
+the print as a PNG instead, with nothing of a JPEG's on the grain; it is 8 bits a colour (the film
+tables are 8-bit, so a wider file would only pad) and carries no EXIF.
 
 ## Any file, not just a CR2
 
@@ -170,7 +179,8 @@ MainActivity.java ──► MfilmNative.java ──► mfilm_jni.c ──► fos
 * `fos_dev_start` reads the CR2 (Canon lossless JPEG in vertical slices), applies the camera's
   white balance, exposes it as a scanner would, and reads the film's `LOOKnn.LUT`.
 * `fos_dev_step(40)` does a slice of work at a time, which is what gives the progress bar.
-* `fos_dev_big(FOS_SIZE_L)` makes the larger JPEG; `fos_jpeg` writes it with EXIF.
+* `fos_dev_big(FOS_SIZE_M | _L | _XL)` makes the bigger print; `fos_jpeg` writes it with EXIF, or
+  `fos_png` writes it lossless (zlib), a band of rows at a time.
 * The film tables are baked at build time from the film model and the Film-Luts LUTs
   (`ml-dev/filmos/tools/gentables.py`): 53 from LUTs, 9 from spektrafilm, 6 from looks.
 

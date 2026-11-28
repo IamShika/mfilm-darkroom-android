@@ -207,8 +207,15 @@
             android:id="@+id/stamp"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="14dp"
             android:text="@string/stamp"
+            android:textColor="@color/paper" />
+
+        <Switch
+            android:id="@+id/lossless"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="14dp"
+            android:text="@string/lossless"
             android:textColor="@color/paper" />
 
         <TextView

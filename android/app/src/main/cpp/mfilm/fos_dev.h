@@ -125,11 +125,19 @@ void fos_dev_cache(const char *dir);
 int fos_dev_table(int film);
 /* also write the frame in full colour as a JPEG at path (before the first step) */
 void fos_dev_jpeg(struct fos_dev *d, const char *path);
+/* and a lossless PNG instead of the JPEG, at path: the print exactly as the
+ * engine made it, at 8 bits a colour (the film tables are 8-bit, so a wider
+ * file would only carry padding). The print is written here, not as a JPEG;
+ * a big print's PNG is that size. Before the first step */
+void fos_dev_png(struct fos_dev *d, const char *path);
+/* the JPEG's quality, 1..100 (before the first step; 92 as it comes) */
+void fos_dev_quality(struct fos_dev *d, int quality);
 /* a bigger print as well (before the first step): FOS_SIZE_M, a third of the
- * sensor each way, or FOS_SIZE_L, half of it. The JPEG is then that size,
- * and zoom (NULL: none) gets the same picture in the print's own palette,
- * for the screen to zoom into (a zoom file, below). Where the camera hasn't
- * the memory, the next size down is made, to the screen's print alone:
+ * sensor each way, FOS_SIZE_L, half of it, or FOS_SIZE_XL, all of it (5184 x
+ * 3456 from a 24 MP sensor). The JPEG (or the PNG) is then that size, and
+ * zoom (NULL: none) gets the same picture in the print's own palette, for the
+ * screen to zoom into (a zoom file, below). Where the camera hasn't the
+ * memory, the next size down is made, to the screen's print alone:
  * fos_dev_made says which once the first step is through */
 void fos_dev_big(struct fos_dev *d, int size, const char *zoom);
 int  fos_dev_made(const struct fos_dev *d, int *w, int *h);     /* FOS_SIZE_*, and the JPEG's size */

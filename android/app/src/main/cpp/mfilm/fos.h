@@ -117,7 +117,7 @@ enum
     FS_HUD_STYLE,       /* the viewfinder: FOS_HUD_CLASSIC .. FOS_HUD_CLEAN */
     FS_HUD_BATT,        /* the battery on the viewfinder HUD */
     FS_SIZE,            /* the darkroom's prints: FOS_SIZE_S (the screen's 720 x 480), _M (a third of the sensor
-                           each way), _L (half of it) */
+                           each way), _L (half of it), _XL (all of it) */
     FS_STAMP,           /* the date in the corner of each print, as a compact camera's data back puts it */
     FS_RECENT,          /* the films loaded last, newest in the low byte: film + 1 in each byte, 0 = none */
     FS_FADE,            /* the short fade between screens (shelf, darkroom, prints); 0: every screen changes at once */
@@ -135,7 +135,7 @@ enum { FOS_HUD_CLASSIC,     /* an SLR's: aperture scale and needle on the right,
        FOS_HUD_STYLES };
 
 /* print sizes (FS_SIZE) */
-enum { FOS_SIZE_S, FOS_SIZE_M, FOS_SIZE_L, FOS_SIZES };
+enum { FOS_SIZE_S, FOS_SIZE_M, FOS_SIZE_L, FOS_SIZE_XL, FOS_SIZES };
 
 enum
 {

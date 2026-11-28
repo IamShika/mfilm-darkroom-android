@@ -11,9 +11,11 @@ add_library(mfilmdarkroom SHARED
         ${ENGINE}/fos_looks.c
         ${ENGINE}/fos_film.c
         ${ENGINE}/fos_gfx.c
-        ${ENGINE}/fos_jpeg.c)
+        ${ENGINE}/fos_jpeg.c
+        ${ENGINE}/fos_png.c)
 
 target_include_directories(mfilmdarkroom PRIVATE ${ENGINE})
 target_compile_options(mfilmdarkroom PRIVATE -O3 -std=gnu99 -Wall -Wno-unused-parameter)
-target_compile_definitions(mfilmdarkroom PRIVATE MFILM_VERSION="${MFILM_VERSION}")
-target_link_libraries(mfilmdarkroom log m)
+# MFILM_SMP: a big print's rows finished on the phone's cores (fos_dev.c)
+target_compile_definitions(mfilmdarkroom PRIVATE MFILM_VERSION="${MFILM_VERSION}" MFILM_SMP=1)
+target_link_libraries(mfilmdarkroom log m z)

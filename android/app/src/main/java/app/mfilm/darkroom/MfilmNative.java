@@ -25,10 +25,11 @@ final class MfilmNative {
     static native String version();
 
     /**
-     * Develop one CR2 into a JPEG.
+     * Develop one CR2 into a JPEG (or a lossless PNG).
      *
      * @param film    index on the shelf
-     * @param size    0 = the screen's print, 1 = medium (a third of the sensor), 2 = large (half)
+     * @param size    0 = the screen's print, 1 = medium (a third of the sensor), 2 = large (half),
+     *                3 = full (all of it: 5184 x 3456 from a 24 MP frame)
      * @param stamp   1 to print the date in the corner
      * @param shadows 0..100: lift the dark end of the print
      * @param style   0 off, 1 bloom, 2 diffusion, 3 halation, 4 motion, 5 streak
@@ -37,21 +38,24 @@ final class MfilmNative {
      * @param spread  0..100: how far it reaches
      * @param warmth  -100..100: its tint, blue to amber
      * @param grain   0..200: the stock's grain on the print, 100 is its own
+     * @param quality the JPEG's quality, 1..100 (no effect on a PNG)
+     * @param png     1 to write a lossless PNG at outPath instead of a JPEG
      * @param when    "2026-10-22 17:45" for the EXIF, or ""
-     * @return 0 when the JPEG is written, -1 otherwise (see lastError)
+     * @return 0 when the print is written, -1 otherwise (see lastError)
      */
-    static native int develop(String cr2, String jpeg, int film, int size, int stamp,
+    static native int develop(String cr2, String outPath, int film, int size, int stamp,
                               int shadows, int style, int amount, int range, int spread, int warmth,
-                              int grain, String when, Progress progress);
+                              int grain, int quality, int png, String when, Progress progress);
 
     /**
      * Develop a picture that is not a CR2 -- an image, or the preview a RAW of
      * another make carries -- into a JPEG. pixels is ARGB, w x h, as
      * Bitmap.getPixels gives them.
      */
-    static native int developImage(int[] pixels, int w, int h, String jpeg, int film, int size,
+    static native int developImage(int[] pixels, int w, int h, String outPath, int film, int size,
                                    int stamp, int shadows, int style, int amount, int range,
-                                   int spread, int warmth, int grain, String when, Progress progress);
+                                   int spread, int warmth, int grain, int quality, int png, String when,
+                                   Progress progress);
 
     /**
      * Keep a CR2 decoded for the next previews, keyed by key (the app's own
