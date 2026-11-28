@@ -36,12 +36,13 @@ final class MfilmNative {
      * @param range   0..100: how far down the tones it is gathered from
      * @param spread  0..100: how far it reaches
      * @param warmth  -100..100: its tint, blue to amber
+     * @param grain   0..200: the stock's grain on the print, 100 is its own
      * @param when    "2026-10-22 17:45" for the EXIF, or ""
      * @return 0 when the JPEG is written, -1 otherwise (see lastError)
      */
     static native int develop(String cr2, String jpeg, int film, int size, int stamp,
                               int shadows, int style, int amount, int range, int spread, int warmth,
-                              String when, Progress progress);
+                              int grain, String when, Progress progress);
 
     /**
      * Develop a picture that is not a CR2 -- an image, or the preview a RAW of
@@ -50,7 +51,7 @@ final class MfilmNative {
      */
     static native int developImage(int[] pixels, int w, int h, String jpeg, int film, int size,
                                    int stamp, int shadows, int style, int amount, int range,
-                                   int spread, int warmth, String when, Progress progress);
+                                   int spread, int warmth, int grain, String when, Progress progress);
 
     /**
      * Keep a CR2 decoded for the next previews, keyed by key (the app's own
@@ -68,7 +69,7 @@ final class MfilmNative {
 
     /** Draw the kept frame with the knobs on screen, into jpeg. 0 when written. */
     static native int previewRender(int film, int shadows, int style, int amount, int range,
-                                    int spread, int warmth, int stamp, String jpeg);
+                                    int spread, int warmth, int grain, int stamp, String jpeg);
 
     /** Let the kept frame go (before a batch, or when the app is done). */
     static native void previewClose();

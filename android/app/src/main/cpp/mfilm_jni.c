@@ -161,6 +161,7 @@ static int run_develop(JNIEnv *env, struct fos_dev *d, const char *out, jint siz
  *   stamp 1 to print the date in the corner
  *   shadows, style, amount, range, spread, warmth: the phone's knobs, as
  *         fos_dev_adjust takes them (0 leaves the camera's print)
+ *   grain the stock's grain on the print, 0..200 percent (100 is its own)
  *   when  "2026-10-22 17:45" for the EXIF, or empty
  *
  * Returns 0 when the JPEG is written, -1 when the frame can't be developed
@@ -169,7 +170,7 @@ static int run_develop(JNIEnv *env, struct fos_dev *d, const char *out, jint siz
 JNIEXPORT jint JNICALL JNI_FN(develop)(JNIEnv *env, jclass cls, jstring jcr2, jstring jout,
                                        jint film, jint size, jint stamp,
                                        jint shadows, jint style, jint amount, jint range,
-                                       jint spread, jint warmth, jstring jwhen, jobject progress)
+                                       jint spread, jint warmth, jint grain, jstring jwhen, jobject progress)
 {
     const char *cr2 = (*env)->GetStringUTFChars(env, jcr2, 0);
     const char *out = (*env)->GetStringUTFChars(env, jout, 0);
@@ -196,6 +197,7 @@ JNIEXPORT jint JNICALL JNI_FN(develop)(JNIEnv *env, jclass cls, jstring jcr2, js
     else
     {
         fos_dev_adjust(d, shadows, style, amount, range, spread, warmth);
+        fos_dev_grain(d, grain);
         r = run_develop(env, d, out, size, stamp, progress);
     }
     (*env)->ReleaseStringUTFChars(env, jcr2, cr2);
@@ -211,7 +213,7 @@ JNIEXPORT jint JNICALL JNI_FN(develop)(JNIEnv *env, jclass cls, jstring jcr2, js
 JNIEXPORT jint JNICALL JNI_FN(developImage)(JNIEnv *env, jclass cls, jintArray jpixels, jint pic_w,
                                             jint pic_h, jstring jout, jint film, jint size,
                                             jint stamp, jint shadows, jint style, jint amount,
-                                            jint range, jint spread, jint warmth, jstring jwhen,
+                                            jint range, jint spread, jint warmth, jint grain, jstring jwhen,
                                             jobject progress)
 {
     const char *out = (*env)->GetStringUTFChars(env, jout, 0);
@@ -255,6 +257,7 @@ JNIEXPORT jint JNICALL JNI_FN(developImage)(JNIEnv *env, jclass cls, jintArray j
     else
     {
         fos_dev_adjust(d, shadows, style, amount, range, spread, warmth);
+        fos_dev_grain(d, grain);
         r = run_develop(env, d, out, size, stamp, progress);
     }
     free(rgb);
@@ -435,7 +438,7 @@ JNIEXPORT jint JNICALL JNI_FN(previewOpenImage)(JNIEnv *env, jclass cls, jintArr
  * develop writes, without reading the RAW again. */
 JNIEXPORT jint JNICALL JNI_FN(previewRender)(JNIEnv *env, jclass cls, jint film, jint shadows,
                                              jint style, jint amount, jint range, jint spread,
-                                             jint warmth, jint stamp, jstring jout)
+                                             jint warmth, jint grain, jint stamp, jstring jout)
 {
     const char *out = (*env)->GetStringUTFChars(env, jout, 0);
     if (!out)
@@ -460,6 +463,7 @@ JNIEXPORT jint JNICALL JNI_FN(previewRender)(JNIEnv *env, jclass cls, jint film,
         return -1;
     }
     fos_dev_adjust(pv, shadows, style, amount, range, spread, warmth);
+    fos_dev_grain(pv, grain);
     fos_dev_stamp(pv, stamp);
     fos_dev_jpeg(pv, out);
     int p = 0;

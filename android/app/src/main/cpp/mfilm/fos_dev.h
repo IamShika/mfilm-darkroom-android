@@ -162,6 +162,9 @@ enum { FOS_BLOOM_OFF, FOS_BLOOM_BLOOM, FOS_BLOOM_DIFFUSION, FOS_BLOOM_HALATION,
        FOS_BLOOM_MOTION, FOS_BLOOM_STREAK, FOS_BLOOM_COUNT };
 void fos_dev_adjust(struct fos_dev *d, int shadows, int style, int amount, int range,
                     int spread, int warmth);
+/* the film stock's grain on the print, 0..200 percent: 100 is the stock's own,
+ * 0 leaves it off, 200 twice as much (0 is what a frame gets before this) */
+void fos_dev_grain(struct fos_dev *d, int percent);
 /* work for about budget_ms; returns progress 0..1000, 1000 when the print
  * is written, or < 0 when the frame can't be developed */
 int fos_dev_step(struct fos_dev *d, int budget_ms);

@@ -53,6 +53,13 @@
             android:text="@string/roll_nothing" />
     </LinearLayout>
 
+    <Button
+        android:id="@+id/rollSheet"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:enabled="false"
+        android:text="@string/roll_sheet" />
+
     <GridView
         android:id="@+id/grid"
         android:layout_width="match_parent"

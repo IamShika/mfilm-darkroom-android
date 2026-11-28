@@ -448,8 +448,9 @@ struct fos_dev
     int pic_w, pic_h;
     int px0, pw, py0, ph;
 
-    /* the phone's knobs (fos_dev_adjust) */
+    /* the phone's knobs (fos_dev_adjust, fos_dev_grain) */
     int shadows, bloom_style, bloom_amount, bloom_range, bloom_spread, bloom_warmth;
+    int grain_adj;                      /* the film stock's grain, 0..200 percent */
     uint16_t *bloom;                    /* the glow, GW x GH, 1/256 of a level */
     int bloom_tint[3], bloom_gain;      /* its colour and strength (1/256) */
 
@@ -2052,6 +2053,7 @@ struct fos_dev *fos_dev_start(const char *cr2, const char *print, int film, int 
     d->film = fos_clamp(film, 0, fos_nfilms - 1);
     d->frame = frame;
     d->look = fos_look_of(fos_films[d->film].key);
+    d->grain_adj = 100;                 /* the stock's own grain until the phone says otherwise */
     d->seed = 12345u + (unsigned) frame * 7919u;
     d->stage = ST_OPEN;
     return d;
@@ -2100,6 +2102,14 @@ void fos_dev_adjust(struct fos_dev *d, int shadows, int style, int amount, int r
     d->bloom_warmth = fos_clamp(warmth, -100, 100);
     /* a glow of nothing is no glow */
     if (!d->bloom_amount) d->bloom_style = FOS_BLOOM_OFF;
+}
+
+/* How much of the film stock's grain the print gets: 0 leaves it off, 100 is
+ * the stock's own, 200 twice as much. The camera's prints are the stock's
+ * own, so a frame developed without touching this comes out as it always did. */
+void fos_dev_grain(struct fos_dev *d, int percent)
+{
+    if (d) d->grain_adj = fos_clamp(percent, 0, 200);
 }
 
 int fos_dev_made(const struct fos_dev *d, int *w, int *h)
@@ -3338,6 +3348,7 @@ static __attribute__((noinline)) void stage_finish_image(struct fos_dev *d, int 
     int c = grain_clump(L, d->pw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    grain = grain * d->grain_adj / 100;     /* the phone's Grain slider: 100 is the stock's own */
     if (grain) finish_grain(o + 3 * d->px0, d->pw, d->seed, grain, L->mono, d->px0, y, q3, q2, q1, q0);
 }
 
@@ -3399,6 +3410,7 @@ static __attribute__((noinline)) void big_finish_image(struct fos_dev *d, int y,
     int c = grain_clump(L, bw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    grain = grain * d->grain_adj / 100;     /* the phone's Grain slider: 100 is the stock's own */
     if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, q3, q2, q1, q0);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
     bloom_row(d, rgb, bw, y, bw, d->bh);
@@ -3480,6 +3492,7 @@ static __attribute__((noinline)) void stage_finish(struct fos_dev *d, int y)
     int c = grain_clump(L, pw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    grain = grain * d->grain_adj / 100;     /* the phone's Grain slider: 100 is the stock's own */
     /* the clump is the print's own width's, as the enlargement's is: the screen print is only
      * FOS_PRINT_W wide on a landscape frame, and a portrait or cropped one is narrower still */
     if (grain) finish_grain(o + 3 * px0, pw, d->seed, grain, L->mono, px0, y, q3, q2, q1, q0);
@@ -3698,6 +3711,7 @@ static __attribute__((noinline)) void big_finish(struct fos_dev *d, int y, uint8
     int c = grain_clump(L, bw, grain_ref(d)), q3, q2, q1, q0;
     grain_taps(c, &q3, &q2, &q1, &q0);
     int grain = (int) (L->grain * 255 * GRAIN_GAIN * 256 * grain_blur(q3, q2, q1, q0));
+    grain = grain * d->grain_adj / 100;     /* the phone's Grain slider: 100 is the stock's own */
     if (grain) finish_grain(rgb, bw, d->seed, grain, L->mono, 0, y, q3, q2, q1, q0);
     stamp_row(d->smask[1], d->sm_w[1], d->sm_h[1], rgb, bw, d->bh, y);
     bloom_row(d, rgb, bw, y, bw, d->bh);

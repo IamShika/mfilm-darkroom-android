@@ -46,6 +46,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -67,7 +68,7 @@ public class MainActivity extends Activity {
     /* what a roll's folder is called under Pictures/M-Film, and what it records */
     private static final String MANIFEST = "manifest.csv";
     private static final String MANIFEST_HEADER =
-            "frame,developed,film,shadows,style,amount,range,spread,warmth,size,stamp,shot,seconds";
+            "frame,developed,film,shadows,style,amount,range,spread,warmth,grain,sharpen,size,stamp,shot,seconds";
 
     private final List<Uri> picked = new ArrayList<>();
     private Uri shared;                      // a frame opened or shared into us
@@ -77,8 +78,13 @@ public class MainActivity extends Activity {
     private boolean busy = true;
 
     private TextView filesView, logView, statusView, versionView;
-    private TextView filmBrandView, filmNameView, filmDescView, previewNote;
+    private TextView filmBrandView, filmNameView, filmDescView, previewNote, shelfNote;
+    private EditText searchView;
     private LinearLayout tabs, canisters, chips;
+
+    /* the films kept by hand (hold a canister), and the shelf's star tab */
+    private final LinkedHashSet<String> favourites = new LinkedHashSet<>();
+    private static final String FAVOURITES = "\u2605";
     private HorizontalScrollView canisterScroll;
     private ImageView previewImage;
     private Spinner sizeSpinner;
@@ -87,7 +93,7 @@ public class MainActivity extends Activity {
     private Button pickButton, developButton, galleryButton, rollButton, shareButton;
     private LinearLayout adjust;
     private HistogramView histogram;
-    private SeekBar shadowsBar, amountBar, rangeBar, spreadBar, warmthBar;
+    private SeekBar shadowsBar, amountBar, rangeBar, spreadBar, warmthBar, grainBar, sharpenBar;
     private Spinner styleSpinner;
 
     /* the print as the knobs leave it, and the same print without them, held side by side */
@@ -123,6 +129,8 @@ public class MainActivity extends Activity {
     private int bloomRange = 50;
     private int bloomSpread = 50;
     private int bloomWarmth;
+    private int grain = 100;                 // percent of the stock's own grain: 0..200
+    private int sharpen;                     // 0..100, the print sharpened after it is developed
 
     /* which of the picked frames the preview shows */
     private int previewIndex;
@@ -150,6 +158,12 @@ public class MainActivity extends Activity {
         bloomRange = prefs.getInt("range", 50);
         bloomSpread = prefs.getInt("spread", 50);
         bloomWarmth = prefs.getInt("warmth", 0);
+        grain = prefs.getInt("grain", 100);
+        sharpen = prefs.getInt("sharpen", 0);
+        String kept = prefs.getString("favourites", "");
+        if (kept != null) {
+            for (String key : kept.split(",")) if (!key.isEmpty()) favourites.add(key);
+        }
         straighten = prefs.getInt("straighten", 0);
         cropShape = prefs.getInt("shape", 0);
         cropZoom = prefs.getInt("zoom", 100);
@@ -174,6 +188,15 @@ public class MainActivity extends Activity {
         tabs = findViewById(R.id.tabs);
         canisters = findViewById(R.id.canisters);
         chips = findViewById(R.id.chips);
+        searchView = findViewById(R.id.search);
+        shelfNote = findViewById(R.id.shelfNote);
+        searchView.addTextChangedListener(new android.text.TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(android.text.Editable s) {
+                if (films.length > 0) buildShelf();
+            }
+        });
         canisterScroll = findViewById(R.id.canisterScroll);
         adjust = findViewById(R.id.adjust);
         histogram = findViewById(R.id.histogram);
@@ -340,18 +363,26 @@ public class MainActivity extends Activity {
 
     /* ---------------------------------------------------------- film shelf */
 
-    /** The camera's shelf: group tabs, the canisters, then the film's name and numbers. */
+    /**
+     * The camera's shelf: the search box, the group tabs (and the star the
+     * films kept by hand stand on), the canisters, then the film's name and
+     * numbers. A search looks through every group at once.
+     */
     private void buildShelf() {
+        final String query = searchView == null ? ""
+                : searchView.getText().toString().trim().toLowerCase(Locale.US);
         tabs.removeAllViews();
-        for (String g : new String[]{"COLOUR", "SLIDE", "B&W", "CINE"}) {
+        for (String g : new String[]{"COLOUR", "SLIDE", "B&W", "CINE", FAVOURITES}) {
             TextView t = new TextView(this);
             t.setText(g);
             t.setTextSize(11);
             t.setLetterSpacing(0.18f);
             t.setPadding((int) dp(9), (int) dp(6), (int) dp(9), (int) dp(6));
-            t.setTextColor(g.equalsIgnoreCase(currentGroup) ? 0xFFE0A33E : 0xFF6E5A4C);
+            t.setTextColor(!query.isEmpty() ? 0xFF6E5A4C
+                    : g.equalsIgnoreCase(currentGroup) ? 0xFFE0A33E : 0xFF6E5A4C);
             t.setOnClickListener(v -> {
                 if (busy) return;
+                searchView.setText("");
                 currentGroup = g;
                 buildShelf();
             });
@@ -359,22 +390,50 @@ public class MainActivity extends Activity {
         }
 
         canisters.removeAllViews();
+        int shown = 0;
         for (Film f : films) {
             String group = f.group.isEmpty() ? "COLOUR" : f.group;
-            if (!group.equalsIgnoreCase(currentGroup)) continue;
+            if (!query.isEmpty()) {
+                if (!matches(f, query)) continue;
+            } else if (FAVOURITES.equals(currentGroup)) {
+                if (!favourites.contains(f.key)) continue;
+            } else if (!group.equalsIgnoreCase(currentGroup)) {
+                continue;
+            }
             CanisterView c = new CanisterView(this);
             c.setFilm(f);
             c.setChosen(f.index == filmIndex);
+            c.setFavourite(favourites.contains(f.key));
             c.setTag(f.index);
             c.setOnClickListener(v -> {
                 if (busy) return;
                 chooseFilm((Integer) v.getTag());
+            });
+            c.setOnLongClickListener(v -> {
+                if (!busy) toggleFavourite((Integer) v.getTag());
+                return true;
             });
             LinearLayout.LayoutParams lp =
                     new LinearLayout.LayoutParams((int) dp(74), (int) dp(126));
             lp.rightMargin = (int) dp(8);
             lp.leftMargin = (int) dp(8);
             canisters.addView(c, lp);
+            shown++;
+        }
+        if (shelfNote != null) {
+            if (shown > 0) {
+                shelfNote.setVisibility(View.GONE);
+            } else {
+                shelfNote.setVisibility(View.VISIBLE);
+                if (!query.isEmpty()) {
+                    shelfNote.setText(getString(R.string.shelf_no_match,
+                            searchView.getText().toString().trim()));
+                } else if (FAVOURITES.equals(currentGroup)) {
+                    shelfNote.setText(getString(R.string.shelf_no_favourites));
+                } else {
+                    shelfNote.setText(getString(R.string.shelf_empty));
+                }
+            }
         }
         scrollToChosen();
 
@@ -392,6 +451,31 @@ public class MainActivity extends Activity {
         chips.addView(chip(getString(R.string.chip_iso), f.boxSpeed(), false));
         chips.addView(chip(getString(R.string.chip_process), f.process, false));
         chips.addView(chip(getString(R.string.chip_exp), "36", true));
+    }
+
+    /** a search word: a film's name, brand, key, process or speed */
+    private static boolean matches(Film f, String q) {
+        return f.name.toLowerCase(Locale.US).contains(q)
+                || f.brand.toLowerCase(Locale.US).contains(q)
+                || f.key.toLowerCase(Locale.US).contains(q)
+                || f.process.toLowerCase(Locale.US).contains(q)
+                || String.valueOf(f.iso).contains(q);
+    }
+
+    /** hold a canister: it goes on the star tab, or comes off it */
+    private void toggleFavourite(int index) {
+        if (index < 0 || index >= films.length) return;
+        Film f = films[index];
+        if (!favourites.remove(f.key)) favourites.add(f.key);
+        StringBuilder sb = new StringBuilder();
+        for (String key : favourites) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(key);
+        }
+        prefs.edit().putString("favourites", sb.toString()).apply();
+        buildShelf();
+        toast(getString(favourites.contains(f.key) ? R.string.shelf_favourite : R.string.shelf_unfavourite,
+                f.name));
     }
 
     private void scrollToChosen() {
@@ -442,7 +526,8 @@ public class MainActivity extends Activity {
     private void saveKnobs() {
         prefs.edit().putInt("shadows", shadows).putInt("style", bloomStyle)
                 .putInt("amount", bloomAmount).putInt("range", bloomRange)
-                .putInt("spread", bloomSpread).putInt("warmth", bloomWarmth).apply();
+                .putInt("spread", bloomSpread).putInt("warmth", bloomWarmth)
+                .putInt("grain", grain).putInt("sharpen", sharpen).apply();
     }
 
     /** the frames last session had, if Android still lets us read them */
@@ -553,7 +638,7 @@ public class MainActivity extends Activity {
     /** the kept frame with the knobs on screen: seconds of work, not a RAW read */
     private int renderKept(int film, boolean stamp, File jpeg) {
         return MfilmNative.previewRender(film, shadows, bloomStyle, bloomAmount, bloomRange,
-                bloomSpread, bloomWarmth, stamp ? 1 : 0, jpeg.getAbsolutePath());
+                bloomSpread, bloomWarmth, grain, stamp ? 1 : 0, jpeg.getAbsolutePath());
     }
 
     /** a picture's preview: its pixels go to the engine once, which keeps them */
@@ -579,7 +664,7 @@ public class MainActivity extends Activity {
         File out = new File(dir, "plain.jpg");
         String tag = key + "|" + film + "|" + (stamp ? 1 : 0);
         if (!tag.equals(plainOf) || !out.isFile()) {
-            if (MfilmNative.previewRender(film, 0, 0, 50, 50, 50, 0, stamp ? 1 : 0,
+            if (MfilmNative.previewRender(film, 0, 0, 50, 50, 50, 0, 100, stamp ? 1 : 0,
                     out.getAbsolutePath()) != 0) {
                 return null;
             }
@@ -630,15 +715,26 @@ public class MainActivity extends Activity {
             previewImage.setImageDrawable(null);
             return;
         }
+        /* the last framed copies go; the frames themselves never do */
+        if (framedPreview != null && framedPreview != previewBitmap) framedPreview.recycle();
+        if (framedPlain != null && framedPlain != plainBitmap && framedPlain != framedPreview)
+            framedPlain.recycle();
         if (Geometry.isSet(straighten, cropShape, cropZoom)) {
-            if (framedPreview != previewBitmap && framedPreview != null) framedPreview.recycle();
-            if (framedPlain != plainBitmap && framedPlain != null) framedPlain.recycle();
             framedPreview = Geometry.apply(previewBitmap, straighten, cropShape, cropZoom);
             framedPlain = plainBitmap == null ? null
                     : Geometry.apply(plainBitmap, straighten, cropShape, cropZoom);
         } else {
             framedPreview = previewBitmap;
             framedPlain = plainBitmap;
+        }
+        /* the same unsharp mask the print gets, on the preview; the held-down
+         * frame is the film as it comes, so it is left as the engine wrote it */
+        if (sharpen > 0) {
+            Bitmap s = Finish.sharpen(framedPreview, sharpen);
+            if (s != framedPreview) {
+                if (framedPreview != previewBitmap) framedPreview.recycle();
+                framedPreview = s;
+            }
         }
         previewImage.setImageBitmap(holding && framedPlain != null ? framedPlain : framedPreview);
         histogram.setBins(histogramOf(framedPreview));
@@ -785,7 +881,7 @@ public class MainActivity extends Activity {
             if (PictureLoader.isCr2(name)) {
                 return MfilmNative.develop(work.getAbsolutePath(), jpeg.getAbsolutePath(), film, size,
                         stamp ? 1 : 0, shadows, bloomStyle, bloomAmount, bloomRange, bloomSpread,
-                        bloomWarmth, when, progress);
+                        bloomWarmth, grain, when, progress);
             }
             Bitmap b = PictureLoader.load(work, name);
             int w = b.getWidth(), h = b.getHeight();
@@ -794,7 +890,7 @@ public class MainActivity extends Activity {
             b.recycle();
             return MfilmNative.developImage(px, w, h, jpeg.getAbsolutePath(), film, size,
                     stamp ? 1 : 0, shadows, bloomStyle, bloomAmount, bloomRange, bloomSpread,
-                    bloomWarmth, when, progress);
+                    bloomWarmth, grain, when, progress);
         } finally {
             work.delete();
         }
@@ -811,6 +907,8 @@ public class MainActivity extends Activity {
         buildFrame();
         buildPresets();
         shadowsBar = addSlider(getString(R.string.shadow), 0, 100, shadows, v -> shadows = v);
+        grainBar = addSlider(getString(R.string.grain), 0, 200, grain, v -> grain = v);
+        sharpenBar = addSlider(getString(R.string.sharpen), 0, 100, sharpen, v -> sharpen = v);
         addChoice(getString(R.string.bloom_style),
                 new String[]{ getString(R.string.bloom_off), getString(R.string.bloom_bloom),
                         getString(R.string.bloom_diffusion), getString(R.string.bloom_halation),
@@ -902,12 +1000,14 @@ public class MainActivity extends Activity {
     private static final class Preset {
         String name = "", film = "";
         int shadows, style, amount = 50, range = 50, spread = 50, warmth;
+        int grain = 100, sharpen;
         int size = 1;
         boolean stamp;
 
         String line() {
             return name + '\t' + film + '\t' + shadows + '\t' + style + '\t' + amount + '\t'
-                    + range + '\t' + spread + '\t' + warmth + '\t' + size + '\t' + (stamp ? 1 : 0);
+                    + range + '\t' + spread + '\t' + warmth + '\t' + size + '\t' + (stamp ? 1 : 0)
+                    + '\t' + grain + '\t' + sharpen;
         }
 
         static Preset parse(String line) {
@@ -925,6 +1025,11 @@ public class MainActivity extends Activity {
                 s.warmth = Integer.parseInt(p[7]);
                 s.size = Integer.parseInt(p[8]);
                 s.stamp = "1".equals(p[9]);
+                /* 1.2.10's two knobs: a name kept before them is the stock's own grain */
+                if (p.length >= 12) {
+                    s.grain = Integer.parseInt(p[10]);
+                    s.sharpen = Integer.parseInt(p[11]);
+                }
             } catch (NumberFormatException e) {
                 return null;
             }
@@ -1042,6 +1147,8 @@ public class MainActivity extends Activity {
         p.range = bloomRange;
         p.spread = bloomSpread;
         p.warmth = bloomWarmth;
+        p.grain = grain;
+        p.sharpen = sharpen;
         p.size = sizeSpinner.getSelectedItemPosition();
         p.stamp = stampSwitch.isChecked();
         for (int i = presets.size() - 1; i >= 0; i--) {
@@ -1081,6 +1188,8 @@ public class MainActivity extends Activity {
             rangeBar.setProgress(clamp(p.range, 0, 100));
             spreadBar.setProgress(clamp(p.spread, 0, 100));
             warmthBar.setProgress(clamp(p.warmth, -100, 100) + 100);
+            grainBar.setProgress(clamp(p.grain, 0, 200));
+            sharpenBar.setProgress(clamp(p.sharpen, 0, 100));
             styleSpinner.setSelection(clamp(p.style, 0, 5));
             sizeSpinner.setSelection(clamp(p.size, 0, 1));
             stampSwitch.setChecked(p.stamp);
@@ -1279,6 +1388,8 @@ public class MainActivity extends Activity {
                     }
                     /* the print the preview showed: turned and cut the same way */
                     if (Geometry.isSet(turn, shape, zoom)) Geometry.rewrite(jpeg, turn, shape, zoom);
+                    /* the print sharpened last, on the window it came out at */
+                    if (sharpen > 0) Finish.rewrite(jpeg, sharpen);
                     long ms = System.currentTimeMillis() - s0;
                     String out = save(jpeg, "MFILM_" + stampFile(when) + "_" + filmKey + "_" + base + ".jpg",
                             folder);
@@ -1287,7 +1398,8 @@ public class MainActivity extends Activity {
                     rows.add(new String[]{name, out, filmKey, String.valueOf(shadows),
                             String.valueOf(bloomStyle), String.valueOf(bloomAmount),
                             String.valueOf(bloomRange), String.valueOf(bloomSpread),
-                            String.valueOf(bloomWarmth), size == 1 ? "medium" : "large",
+                            String.valueOf(bloomWarmth), String.valueOf(grain), String.valueOf(sharpen),
+                            size == 1 ? "medium" : "large",
                             stamp ? "yes" : "no", when,
                             String.format(Locale.US, "%.1f", ms / 1000.0)});
                     final String line = getString(R.string.frame_done, name, ms / 1000.0, out);

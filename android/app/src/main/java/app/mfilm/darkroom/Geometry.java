@@ -102,7 +102,7 @@ final class Geometry
     }
 
     /** the original's JFIF/EXIF/XMP segments, then the new file's JPEG data */
-    private static void keepMetadata(File original, File encoded, File out) throws IOException {
+    static void keepMetadata(File original, File encoded, File out) throws IOException {
         byte[] a = bytes(original), b = bytes(encoded);
         try (OutputStream o = new FileOutputStream(out)) {
             o.write(a, 0, Math.min(2, a.length));            // the original's SOI

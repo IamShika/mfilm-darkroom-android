@@ -23,8 +23,10 @@
     <string name="choose_first">Choose the files first.</string>
     <string name="developing">Developing %1$d frame(s) with %2$s…</string>
 
-    <string name="adjust_title">SHADOWS · GLOW</string>
+    <string name="adjust_title">SHADOWS · GRAIN · SHARPEN · GLOW</string>
     <string name="shadow">Shadows</string>
+    <string name="grain">Grain %</string>
+    <string name="sharpen">Sharpen</string>
     <string name="bloom_style">Style</string>
     <string name="bloom_off">Off</string>
     <string name="bloom_bloom">Bloom</string>
@@ -66,7 +68,7 @@
     <string name="shape_three_two">35 mm 3:2</string>
     <string name="shape_wide">Wide 16:9</string>
 
-    <string name="compare_note">without the Shadows and the glow — let go to see the print</string>
+    <string name="compare_note">the film just as it comes — let go to see the print</string>
     <string name="presets_title">PRESETS · ONE TAP PUTS THE DARKROOM BACK</string>
     <string name="preset_save">Save this</string>
     <string name="preset_hint">Name this darkroom</string>
@@ -77,6 +79,13 @@
     <string name="preset_applied">%1$s · back on the sliders.</string>
     <string name="manifest_written">Manifest updated: %1$s</string>
     <string name="manifest_failed">Can’t write the manifest: %1$s</string>
+
+    <string name="shelf_search">Search the shelf · film, brand, ISO</string>
+    <string name="shelf_no_match">No film on the shelf matches “%1$s”.</string>
+    <string name="shelf_no_favourites">No favourites yet. Hold a canister on the shelf to keep it here.</string>
+    <string name="shelf_empty">No film on this shelf.</string>
+    <string name="shelf_favourite">“%1$s” is on the star shelf.</string>
+    <string name="shelf_unfavourite">“%1$s” is off the star shelf.</string>
 
     <string name="chip_iso">ISO</string>
     <string name="chip_process">PROCESS</string>
@@ -98,6 +107,12 @@
     <string name="roll_thumbs_done">Previews ready.</string>
     <string name="roll_all">Select all</string>
     <string name="roll_nothing">None</string>
+    <string name="roll_sheet">Export the contact sheet</string>
+    <string name="roll_sheet_sub">%1$s · %2$d frames</string>
+    <string name="roll_sheet_working">Laying out the contact sheet…</string>
+    <string name="roll_sheet_done">Contact sheet saved in Pictures/M-Film.</string>
+    <string name="roll_sheet_failed">Can\'t write the contact sheet: %1$s</string>
+    <string name="roll_sheet_share">Share the contact sheet</string>
     <string name="roll_add">Add %1$d to the darkroom</string>
     <string name="roll_add_empty">Add to the darkroom</string>
     <string name="select">Select</string>

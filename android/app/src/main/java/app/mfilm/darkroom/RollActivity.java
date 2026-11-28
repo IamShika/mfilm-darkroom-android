@@ -2,14 +2,20 @@ package app.mfilm.darkroom;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Intent;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 import android.util.SparseBooleanArray;
 import android.util.TypedValue;
 import android.view.View;
@@ -29,7 +35,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -64,7 +72,7 @@ public class RollActivity extends Activity {
 
     private TextView title, sub, status;
     private ProgressBar bar;
-    private Button add, pickLog;
+    private Button add, pickLog, sheet;
     private GridView grid;
     private RollAdapter adapter;
 
@@ -79,6 +87,7 @@ public class RollActivity extends Activity {
         bar = findViewById(R.id.rollBar);
         add = findViewById(R.id.rollAdd);
         pickLog = findViewById(R.id.rollPick);
+        sheet = findViewById(R.id.rollSheet);
         grid = findViewById(R.id.grid);
 
         adapter = new RollAdapter();
@@ -97,6 +106,7 @@ public class RollActivity extends Activity {
         });
         add.setOnClickListener(v -> finishWith(chosenFrames()));
         pickLog.setOnClickListener(v -> chooseRoll());
+        sheet.setOnClickListener(v -> exportSheet());
 
         String extra = getIntent().getStringExtra(EXTRA_TREE);
         if (extra == null) {
@@ -205,6 +215,7 @@ public class RollActivity extends Activity {
         adapter.notifyDataSetChanged();
         add.setEnabled(false);
         add.setText(getString(R.string.roll_add_empty));
+        sheet.setEnabled(false);
         bar.setVisibility(View.GONE);
         bar.setProgress(0);
 
@@ -319,7 +330,7 @@ public class RollActivity extends Activity {
             try {
                 copy(frames.get(i), raw);
                 int r = MfilmNative.develop(raw.getAbsolutePath(), jpeg.getAbsolutePath(),
-                        filmIndex, 0, 0, 0, 0, 0, 0, 0, 0, "", null);
+                        filmIndex, 0, 0, 0, 0, 0, 0, 0, 0, 100, "", null);
                 raw.delete();
                 if (r == 0) {
                     Bitmap b = decode(jpeg, 480);
@@ -346,7 +357,122 @@ public class RollActivity extends Activity {
             if (seq != rollSeq) return;
             status.setText(getString(R.string.roll_thumbs_done));
             bar.setVisibility(View.GONE);
+            sheet.setEnabled(true);
         });
+    }
+
+    /* ------------------------------------------------------- the sheet, on file */
+
+    /**
+     * The roll as one picture: every developed frame of the sheet, three
+     * lines of them to a page, in the same order and with the same film the
+     * camera's contact sheet has. It goes in the roll's folder under
+     * Pictures/M-Film and then to whichever app the phone offers.
+     */
+    private void exportSheet() {
+        if (frames.isEmpty()) {
+            toast(getString(R.string.roll_nothing));
+            return;
+        }
+        final List<Bitmap> cells = new ArrayList<>(thumbs);
+        final String film = filmKey.isEmpty() ? getString(R.string.roll_no_film) : filmKey;
+        sheet.setEnabled(false);
+        status.setText(getString(R.string.roll_sheet_working));
+        new Thread(() -> {
+            Bitmap made = composeSheet(cells, film);
+            Uri saved = null;
+            String bad = null;
+            try {
+                saved = saveSheet(made);
+            } catch (Exception e) {
+                bad = e.getMessage() == null ? e.toString() : e.getMessage();
+            }
+            final Uri uri = saved;
+            final String err = bad;
+            ui(() -> {
+                sheet.setEnabled(true);
+                status.setText(err == null ? getString(R.string.roll_sheet_done)
+                        : getString(R.string.roll_sheet_failed, err));
+                if (uri != null) shareSheet(uri);
+            });
+        }).start();
+    }
+
+    /** the frames laid out in a grid, with the roll and the film above them */
+    private Bitmap composeSheet(List<Bitmap> cells, String film) {
+        final int cols = 4, cellW = 384, cellH = 256, pad = 14, cap = 26, head = 92;
+        final int n = cells.size();
+        final int rows = Math.max(1, (n + cols - 1) / cols);
+        final int w = pad + cols * (cellW + pad);
+        final int h = head + rows * (cellH + cap + pad) + pad;
+        Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(out);
+        c.drawColor(0xFF120E0C);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(0xFFE0A33E);
+        p.setTypeface(Typeface.DEFAULT_BOLD);
+        p.setTextSize(34);
+        c.drawText("M-FILM \u00B7 " + getString(R.string.roll_title, rollNumber), pad, 44, p);
+        p.setTypeface(Typeface.DEFAULT);
+        p.setTextSize(20);
+        p.setColor(0xFFDDBB90);
+        c.drawText(getString(R.string.roll_sheet_sub, film, n), pad, 76, p);
+        Paint image = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+        Paint cell = new Paint();
+        cell.setColor(0xFF1E1210);
+        p.setTextSize(18);
+        p.setColor(0xFF9A7F6B);
+        for (int i = 0; i < n; i++) {
+            int x = pad + (i % cols) * (cellW + pad);
+            int y = head + (i / cols) * (cellH + cap + pad);
+            c.drawRect(x, y, x + cellW, y + cellH, cell);
+            Bitmap b = cells.get(i);
+            if (b != null) {
+                float s = Math.min((float) cellW / b.getWidth(), (float) cellH / b.getHeight());
+                float dw = b.getWidth() * s, dh = b.getHeight() * s;
+                c.drawBitmap(b, x + (cellW - dw) / 2f, y + (cellH - dh) / 2f, image);
+            }
+            String name = i < names.size() ? names.get(i).replaceAll("(?i)\\.cr2$", "") : String.valueOf(i + 1);
+            c.drawText((i + 1) + " \u00B7 " + name, x + 2, y + cellH + 20, p);
+        }
+        return out;
+    }
+
+    /** the sheet into the roll's folder under Pictures/M-Film, as a JPEG */
+    private Uri saveSheet(Bitmap sheetBm) throws IOException {
+        String folder = "Pictures/M-Film" + (rollNumber.isEmpty() ? "" : "/ROLL_" + rollNumber);
+        String name = "MFILM_SHEET" + (rollNumber.isEmpty() ? "" : "_ROLL_" + rollNumber) + "_"
+                + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date()) + ".jpg";
+        ContentValues v = new ContentValues();
+        v.put(MediaStore.Images.Media.DISPLAY_NAME, name);
+        v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+        v.put(MediaStore.Images.Media.RELATIVE_PATH, folder);
+        v.put(MediaStore.Images.Media.IS_PENDING, 1);
+        ContentResolver cr = getContentResolver();
+        Uri uri = cr.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
+        if (uri == null) throw new IOException("MediaStore refused " + name);
+        try (OutputStream out = cr.openOutputStream(uri)) {
+            if (out == null || !sheetBm.compress(Bitmap.CompressFormat.JPEG, 92, out)) {
+                cr.delete(uri, null, null);
+                throw new IOException("can't write " + name);
+            }
+        }
+        ContentValues done = new ContentValues();
+        done.put(MediaStore.Images.Media.IS_PENDING, 0);
+        cr.update(uri, done, null, null);
+        return uri;
+    }
+
+    private void shareSheet(Uri uri) {
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("image/jpeg");
+        send.putExtra(Intent.EXTRA_STREAM, uri);
+        send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(Intent.createChooser(send, getString(R.string.roll_sheet_share)));
+        } catch (Exception e) {
+            toast(getString(R.string.no_gallery));
+        }
     }
 
     /* ------------------------------------------------------------ the sheet */

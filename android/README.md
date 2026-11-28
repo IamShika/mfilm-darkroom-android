@@ -21,9 +21,18 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
   redraws it in a moment instead of reading the RAW again
 * choose one of the **68 film stocks** on a shelf like the camera's — COLOUR / SLIDE / B&W / CINE,
   canisters in their box colours, with the film's blurb, ISO and process under the name
+* **find a film**: the search box above the tabs looks through every group at once by name, brand,
+  key, process or speed, and the star tab is the shelf of your own films — hold a canister to keep
+  it there (an amber star pins it on the lid), hold it again to take it off. Both are kept between
+  sessions
 * **open a roll**: point it at the folder holding `ROLL_NNN.TXT` and the app reads the log, finds
   the frames it lists, takes the film the roll was shot on, and shows them as a contact sheet —
   tap one for a full preview, tick what you want (or select all) and they land in the darkroom
+* **grain and sharpening**: a Grain slider sets how much of the stock's own grain the print gets —
+  0 leaves it off, 100 is the film as it is, 200 twice as much — and Sharpen adds an unsharp mask
+  after the develop (0 off, 100 the whole of the difference between a pixel and its neighbours),
+  on the preview and on the print alike. Both are off the engine's own path: grain is the camera's
+  own numbers scaled, and sharpening is done to the finished print, whose EXIF is carried over
 * **shadows and glow**: a Shadows slider lifts the dark end of the frame (some photos come out
   darker than the phone showed them), and a Glow panel with Lightroom's five styles — Bloom,
   Diffusion, Halation, Motion and Streak — each with Amount, Range (how far down the tones it is
@@ -43,12 +52,16 @@ the card in `ML/DARKROOM`. Nothing from *Darkrooms* is used or reverse engineere
   the lens, the ISO, the shutter and the focal length the CR2 was shot with go into the print, and
   its caption (the film) is in the XMP too. A roll's prints go into their own
   `Pictures/M-Film/ROLL_NNN`, and every batch adds its frames to a `manifest.csv` beside them (the
-  film, every knob, the size, the stamp, the time and the file it wrote)
+  film, every knob — shadows, glow, grain, sharpen — the size, the stamp, the time and the file it
+  wrote)
 * **share the print** — the last print DEVELOP wrote goes to whichever app the phone offers
   (messages, mail, Drive, a photo editor) from one button under the log
-* **come back to where you were**: the film, the Shadows and Glow values, the print size, the date
-  stamp and the frames picked last time are kept, so a roll shot on Gold 200 opens on Gold 200
-  with its trail values where you left them
+* **export the contact sheet** — the roll screen's *Export the contact sheet* lays the developed
+  frames out on one picture, four to a line with the frame numbers under them, writes it into the
+  roll's folder in `Pictures/M-Film` and offers it to the share sheet
+* **come back to where you were**: the film, the Shadows, Grain, Sharpen and Glow values, the print
+  size, the date stamp, the favourites shelf and the frames picked last time are kept, so a roll
+  shot on Gold 200 opens on Gold 200 with its trail values where you left them
 * **leave the app while it works**: a roll develops in the foreground with a wake lock, so the
   notification shade shows the frame being developed and going to the gallery doesn't stop it
 

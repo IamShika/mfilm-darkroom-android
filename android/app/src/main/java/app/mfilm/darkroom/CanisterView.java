@@ -17,6 +17,7 @@ final class CanisterView extends View {
     private final RectF body = new RectF();
     private Film film;
     private boolean chosen;
+    private boolean favourite;
 
     CanisterView(Context context) {
         super(context);
@@ -32,6 +33,12 @@ final class CanisterView extends View {
 
     void setChosen(boolean c) {
         chosen = c;
+        invalidate();
+    }
+
+    /** kept by hand: an amber star pinned on the lid */
+    void setFavourite(boolean f) {
+        favourite = f;
         invalidate();
     }
 
@@ -86,6 +93,16 @@ final class CanisterView extends View {
         text(c, film.boxSpeed(), (l + r) / 2f, top + h * 0.53f, h * 0.17f, film.ink, true);
         text(c, "135-36", (l + r) / 2f, bot - h * 0.035f, h * 0.05f,
                 contrast(film.band), false);
+
+        /* kept by hand: a star on the lid */
+        if (favourite) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0xFFE0A33E);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            paint.setTextSize(dp(10));
+            c.drawText("\u2605", w / 2f, top - dp(1), paint);
+        }
 
         /* the one on the camera's shelf sits under the amber marker */
         if (chosen) {
